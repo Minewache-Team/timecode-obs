@@ -231,3 +231,90 @@ TEST(LTCRoundtripTest, EncodeNullBuffer)
 
 	ltc_wrapper_destroy(w);
 }
+
+/*
+ * DaVinci Resolve compatibility: verify that consecutive frames encode
+ * with sequential timecodes and no discontinuities. This simulates the
+ * free-running inc_timecode path that the drift-aware resync relies on.
+ */
+TEST(LTCRoundtripTest, ContinuousTimecodeSequence25fps)
+{
+	const int sample_rate = 48000;
+	const int fps = 25;
+	const int spf = sample_rate / fps;
+	const int num_frames = 50; /* ~2 seconds of continuous TC */
+
+	ltc_wrapper_t *w = ltc_wrapper_create(sample_rate, TC_FPS_25);
+	ASSERT_NE(w, nullptr);
+
+	/* Start at 23:59:58:00 to also test midnight rollover in sequence */
+	ltc_wrapper_set_timecode(w, 23, 59, 58, 0);
+
+	/* Encode all frames into one large buffer */
+	const int total_max = spf * num_frames + 4000;
+	float *all_audio = new float[total_max];
+	int total_samples = 0;
+
+	for (int f = 0; f < num_frames; f++) {
+		float buffer[4800];
+		int samples = ltc_wrapper_encode_frame(w, buffer, 4800);
+		ASSERT_GT(samples, 0) << "Frame " << f << " encode failed";
+
+		memcpy(&all_audio[total_samples], buffer,
+		       (size_t)samples * sizeof(float));
+		total_samples += samples;
+
+		ltc_wrapper_inc_timecode(w);
+	}
+
+	/* Convert to byte samples for decoder */
+	ltcsnd_sample_t *byte_buf = new ltcsnd_sample_t[total_samples];
+	for (int i = 0; i < total_samples; i++) {
+		byte_buf[i] =
+			(ltcsnd_sample_t)((all_audio[i] * 128.0f) + 128.0f);
+	}
+
+	/* Decode and verify sequence continuity */
+	LTCDecoder *decoder = ltc_decoder_create(spf, 32);
+	ASSERT_NE(decoder, nullptr);
+
+	ltc_decoder_write(decoder, byte_buf, (size_t)total_samples, 0);
+
+	LTCFrameExt frame;
+	int decoded_count = 0;
+	int prev_total_frames = -1;
+
+	while (ltc_decoder_read(decoder, &frame)) {
+		SMPTETimecode stime;
+		ltc_frame_to_time(&stime, &frame.ltc, 0);
+
+		int total_frames = stime.hours * 3600 * fps +
+				   stime.mins * 60 * fps +
+				   stime.secs * fps + stime.frame;
+
+		if (prev_total_frames >= 0) {
+			int expected = prev_total_frames + 1;
+			/* Handle midnight rollover: 24*3600*25 = 2160000 */
+			if (expected >= 24 * 3600 * fps)
+				expected = 0;
+			EXPECT_EQ(total_frames, expected)
+				<< "Timecode discontinuity at decoded frame "
+				<< decoded_count << ": "
+				<< (int)stime.hours << ":"
+				<< (int)stime.mins << ":"
+				<< (int)stime.secs << ":"
+				<< (int)stime.frame;
+		}
+
+		prev_total_frames = total_frames;
+		decoded_count++;
+	}
+
+	EXPECT_GT(decoded_count, 5)
+		<< "Expected to decode multiple consecutive frames for continuity check";
+
+	delete[] all_audio;
+	delete[] byte_buf;
+	ltc_decoder_free(decoder);
+	ltc_wrapper_destroy(w);
+}

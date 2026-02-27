@@ -270,6 +270,8 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 | 2026-02-27 | TICKET-005 | Changed ltc_wrapper_create API to accept tc_framerate_t enum | Correct handling of 29.97df (30000/1001 rate), proper TV standard per framerate | Keep int fps param (can't represent 29.97), separate create function (API bloat) |
 | 2026-02-27 | TICKET-005 | Fixed ltc_encoder_create: pass fps_rate, not samples_per_frame | Original code passed SPF as fps param, resulting in 25 samples/frame instead of 1920 | N/A (was a bug) |
 | 2026-02-27 | TICKET-006 | Frame-buffer approach for continuous audio | Encodes LTC frames into a buffer, copies samples out per video_tick. Re-syncs to wall clock every ~5s. | Pure wall-clock per tick (discontinuities), free-running only (drift) |
+| 2026-02-27 | TICKET-008 | Drift-aware resync instead of blind hard-resync | Hard resync every 150 frames caused timecode jumps breaking DaVinci Resolve. Now checks every 750 frames (~30s) and only resyncs if drift > 2 frames. | Blind hard-resync (causes TC jumps), pure free-running (accumulates drift) |
+| 2026-02-27 | TICKET-008 | Added #include <plugin-support.h> to ltc-source.c | obs_log() declared in plugin-support.h, was missing from ltc-source.c causing Windows build failure | N/A (was a build error) |
 
 ---
 
@@ -277,6 +279,7 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 | Session | Date | Agent | Tickets Worked | Status at End | Notes |
 |---------|------|-------|----------------|---------------|-------|
+| 2 | 2026-02-27 | Claude Opus 4.6 | TICKET-008 (partial) | DaVinci Resolve compat fixes done | Fixed obs_log build error (missing plugin-support.h include). Replaced blind hard-resync with drift-aware resync (750 frame interval, 2 frame threshold). Added ContinuousTimecodeSequence25fps test. All 27 tests pass. |
 | 1 | 2026-02-27 | Claude Opus 4.6 | TICKET-001 through TICKET-007 | All 7 tickets DONE | Full integration: NTP sync thread, LTC audio gen, Properties UI. Fixed ltc_encoder_create bug (was passing SPF instead of FPS). All 26 unit tests pass. |
 
 *(Agent: Add a row at the START of each new session and UPDATE it at the end.)*
