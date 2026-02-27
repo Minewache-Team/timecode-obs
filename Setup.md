@@ -201,11 +201,31 @@ Extensions installieren:
 
 ## Schritt 6: Plugin in OBS testen
 
-### Windows
+### Option A: Install-Skript verwenden (empfohlen)
 
 ```powershell
-# Plugin-Binary kopieren
-$OBS_PLUGINS = "$env:APPDATA\obs-studio\plugins\obs-ltc-timecode"
+# Windows (PowerShell)
+.\install.ps1
+
+# Linux (Bash)
+chmod +x install.sh
+./install.sh
+```
+
+Das Skript erstellt automatisch die korrekte Ordnerstruktur und kopiert alle Dateien.
+PowerShell muss ggf. als Administrator gestartet werden (Rechtsklick → "Als Administrator ausführen").
+
+### Option B: Manuell kopieren
+
+> **WICHTIG:** OBS lädt Plugins **NICHT** aus `%APPDATA%\obs-studio\plugins\`!
+> Der korrekte Pfad ist `C:\ProgramData\obs-studio\plugins\` (= `%ProgramData%`).
+> `%APPDATA%` ist nur für OBS-Einstellungen, nicht für Plugin-Binaries.
+
+#### Windows
+
+```powershell
+# Plugin-Binary kopieren (ACHTUNG: ProgramData, NICHT AppData!)
+$OBS_PLUGINS = "$env:ProgramData\obs-studio\plugins\obs-ltc-timecode"
 New-Item -ItemType Directory -Force -Path "$OBS_PLUGINS\bin\64bit"
 New-Item -ItemType Directory -Force -Path "$OBS_PLUGINS\data"
 
@@ -213,7 +233,7 @@ Copy-Item "build_x64\Release\obs-ltc-timecode.dll" "$OBS_PLUGINS\bin\64bit\"
 Copy-Item -Recurse "data\*" "$OBS_PLUGINS\data\"
 ```
 
-### Linux
+#### Linux
 
 ```bash
 # Plugin-Binary kopieren
@@ -227,10 +247,18 @@ cp -r data/* "$OBS_PLUGINS/data/"
 
 ### In OBS verifizieren
 
-1. OBS starten
+1. OBS starten (komplett neu starten falls es schon lief)
 2. **Quellen** → **"+"** → Es sollte **"LTC Timecode Generator"** in der Liste erscheinen
 3. Quelle hinzufügen → Im Audio-Mixer sollte ein stiller Kanal erscheinen
 4. Im Properties-Panel: NTP Status und Framerate-Auswahl prüfen
+
+### Falls das Plugin nicht erscheint
+
+1. **Richtiger Ordner?** Plugin muss in `C:\ProgramData\obs-studio\plugins\` liegen, NICHT in `%APPDATA%`!
+2. Prüfe **Hilfe** → **Log-Dateien** → **Aktuelles Log anzeigen**
+3. Suche nach `obs-ltc-timecode` im Log
+4. Prüfe ob die Ordnerstruktur exakt stimmt: `plugins\obs-ltc-timecode\bin\64bit\obs-ltc-timecode.dll`
+5. Prüfe ob `data\locale\en-US.ini` vorhanden ist
 
 ---
 

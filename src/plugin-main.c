@@ -25,12 +25,24 @@
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
 
+const char *obs_module_description(void)
+{
+	return "NTP-synchronized LTC timecode audio source for multi-camera sync";
+}
+
 bool obs_module_load(void)
 {
-	ntp_platform_init();
+	obs_log(LOG_INFO, "loading plugin (version %s)...", PLUGIN_VERSION);
+
+	if (!ntp_platform_init()) {
+		obs_log(LOG_WARNING, "NTP platform init failed (network features may not work)");
+	}
+
 	ltc_source_register();
 
-	obs_log(LOG_INFO, "plugin loaded successfully (version %s)", PLUGIN_VERSION);
+	obs_log(LOG_INFO, "plugin loaded successfully (version %s) — "
+			  "source 'LTC Timecode Generator' registered",
+		PLUGIN_VERSION);
 	return true;
 }
 
