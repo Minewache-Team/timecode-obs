@@ -11,6 +11,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "timecode.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -19,13 +21,14 @@ extern "C" {
 typedef struct ltc_wrapper ltc_wrapper_t;
 
 /*
- * Create an LTC encoder.
+ * Create an LTC encoder for a specific SMPTE framerate.
+ * Handles 29.97df correctly (30000/1001 sample rate, dfbit set).
  *
  * @param sample_rate  Audio sample rate (e.g., 48000)
- * @param fps          Frame rate (24, 25, 30, 50, 60)
+ * @param fps          SMPTE framerate enum
  * @return Encoder context, or NULL on failure
  */
-ltc_wrapper_t *ltc_wrapper_create(int sample_rate, int fps);
+ltc_wrapper_t *ltc_wrapper_create(int sample_rate, tc_framerate_t fps);
 
 /*
  * Destroy an LTC encoder and free resources.
@@ -44,6 +47,12 @@ void ltc_wrapper_destroy(ltc_wrapper_t *w);
 void ltc_wrapper_set_timecode(ltc_wrapper_t *w, int h, int m, int s, int f);
 
 /*
+ * Increment the encoder's internal timecode by one frame.
+ * Handles midnight rollover and drop-frame skip pattern.
+ */
+void ltc_wrapper_inc_timecode(ltc_wrapper_t *w);
+
+/*
  * Encode one LTC frame into PCM audio samples (float, mono).
  * Output amplitude is -12dBFS (0.25).
  *
@@ -53,6 +62,16 @@ void ltc_wrapper_set_timecode(ltc_wrapper_t *w, int h, int m, int s, int f);
  * @return Number of samples written, or -1 on error
  */
 int ltc_wrapper_encode_frame(ltc_wrapper_t *w, float *buffer, int max_samples);
+
+/*
+ * Get the nominal samples per LTC frame for this encoder.
+ */
+int ltc_wrapper_get_samples_per_frame(ltc_wrapper_t *w);
+
+/*
+ * Get the nominal integer fps for this encoder.
+ */
+int ltc_wrapper_get_fps(ltc_wrapper_t *w);
 
 #ifdef __cplusplus
 }

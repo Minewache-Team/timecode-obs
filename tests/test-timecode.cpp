@@ -41,9 +41,9 @@ TEST(TimecodeTest, FrameFromMicroseconds30fps)
 TEST(TimecodeTest, MidnightRollover)
 {
 	smpte_timecode_t tc;
-	/* 23:59:59 + 29/30 frame => should still be valid */
+	/* 23:59:59 + frame 29/30: 29/30 = 0.9667s = 966667 usec */
 	int64_t unix_sec = 23 * 3600 + 59 * 60 + 59;
-	ASSERT_TRUE(timecode_from_unix(unix_sec, 966666, TC_FPS_30, &tc));
+	ASSERT_TRUE(timecode_from_unix(unix_sec, 966667, TC_FPS_30, &tc));
 	EXPECT_EQ(tc.hours, 23);
 	EXPECT_EQ(tc.minutes, 59);
 	EXPECT_EQ(tc.seconds, 59);
