@@ -53,6 +53,7 @@ function Package {
         ErrorAction = 'SilentlyContinue'
         Path = @(
             "${ProjectRoot}/release/${ProductName}-*-windows-*.zip"
+            "${ProjectRoot}/release/${ProductName}-*-windows-*-setup.exe"
         )
     }
 
@@ -66,6 +67,38 @@ function Package {
         Verbose = ($Env:CI -ne $null)
     }
     Compress-Archive -Force @CompressArgs
+    Log-Group
+
+    Log-Group "Building installer..."
+    $IssFile = "${ProjectRoot}/installer/obs-ltc-timecode.iss"
+    if ( Test-Path $IssFile ) {
+        $IsccPath = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+        if ( -not (Test-Path $IsccPath) ) {
+            Write-Information "Installing Inno Setup..."
+            choco install innosetup --yes --no-progress 2>&1 | Write-Debug
+            $IsccPath = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+        }
+
+        if ( Test-Path $IsccPath ) {
+            $InstallerOutputDir = "${ProjectRoot}/release"
+            & $IsccPath `
+                /DMyAppVersion="${ProductVersion}" `
+                /DConfiguration="${Configuration}" `
+                /O"${InstallerOutputDir}" `
+                /F"${OutputName}-setup" `
+                $IssFile
+
+            if ( $LASTEXITCODE -ne 0 ) {
+                Write-Warning "Inno Setup compilation failed (exit code $LASTEXITCODE)"
+            } else {
+                Write-Information "Installer created: ${InstallerOutputDir}/${OutputName}-setup.exe"
+            }
+        } else {
+            Write-Warning "Inno Setup not found, skipping installer creation"
+        }
+    } else {
+        Write-Warning "Installer script not found at ${IssFile}, skipping"
+    }
     Log-Group
 }
 
