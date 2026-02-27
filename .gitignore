@@ -22,6 +22,8 @@
 !PROJECT.md
 !Setup.md
 !SYSTEM_PROMPT.md
+!install.ps1
+!install.sh
 
 # Exclude lock files
 *.lock.json

@@ -33,34 +33,67 @@ When multiple PCs run this plugin, their recordings share the same NTP-derived t
 
 ### Windows
 
+**Option A: Install script (recommended)**
+
+After building (or extracting a release), run the install script from the project root:
+
+```powershell
+.\install.ps1
+```
+
+The script automatically:
+- Creates the `plugins` folder if it doesn't exist (this is normal — OBS doesn't create it by default)
+- Copies the DLL and locale data to the correct paths
+- Verifies the installation
+
+To uninstall: `.\install.ps1 -Uninstall`
+
+**Option B: Manual install**
+
 1. Download the latest release `.zip` from the [Releases](../../releases) page
 2. Extract the archive
 3. Copy the contents to your OBS plugins folder:
    ```
    %APPDATA%\obs-studio\plugins\obs-ltc-timecode\
    ```
+
+   > **Note:** The `plugins` folder does NOT exist by default in `%APPDATA%\obs-studio\` —
+   > you'll only see `plugin_config`. You must create the `plugins` folder yourself. This is normal OBS behavior.
+
    The folder structure should look like:
    ```
-   obs-ltc-timecode/
-   ├── bin/
-   │   └── 64bit/
-   │       └── obs-ltc-timecode.dll
-   └── data/
-       └── locale/
-           └── en-US.ini
+   %APPDATA%\obs-studio\
+   ├── plugin_config\          ← already exists (OBS creates this)
+   └── plugins\                ← you create this
+       └── obs-ltc-timecode\
+           ├── bin\
+           │   └── 64bit\
+           │       └── obs-ltc-timecode.dll
+           └── data\
+               └── locale\
+                   └── en-US.ini
    ```
 4. Restart OBS Studio
 
 ### Linux
 
-1. Download the latest release `.tar.gz` or `.deb` from the [Releases](../../releases) page
+**Option A: Install script (recommended)**
 
-**Option A: .deb package (Ubuntu/Debian)**
+After building, run the install script from the project root:
+
+```bash
+chmod +x install.sh
+./install.sh
+```
+
+To uninstall: `./install.sh --uninstall`
+
+**Option B: .deb package (Ubuntu/Debian)**
 ```bash
 sudo dpkg -i obs-ltc-timecode_*.deb
 ```
 
-**Option B: Manual install**
+**Option C: Manual install**
 ```bash
 tar xzf obs-ltc-timecode_*.tar.gz
 mkdir -p ~/.config/obs-studio/plugins/obs-ltc-timecode/bin/64bit
@@ -69,7 +102,7 @@ cp obs-ltc-timecode.so ~/.config/obs-studio/plugins/obs-ltc-timecode/bin/64bit/
 cp -r data/* ~/.config/obs-studio/plugins/obs-ltc-timecode/data/
 ```
 
-3. Restart OBS Studio
+Restart OBS Studio after installation.
 
 ## Usage
 
@@ -106,9 +139,26 @@ The properties panel also shows:
 
 ### Plugin doesn't appear in OBS
 
-- Verify the plugin files are in the correct folder structure (see [Installation](#installation))
-- Check the OBS log (`Help` → `Log Files`) for plugin loading errors
-- Make sure you're using a 64-bit version of OBS Studio
+**Step-by-step checklist:**
+
+1. **Check the folder structure** — the most common issue:
+   - Windows: Open `%APPDATA%\obs-studio\plugins\obs-ltc-timecode\` in Explorer
+   - The `plugins` folder does NOT exist by default — you must create it (or use `install.ps1`)
+   - Verify `bin\64bit\obs-ltc-timecode.dll` exists
+   - Verify `data\locale\en-US.ini` exists
+
+2. **Check the OBS log** — `Help` → `Log Files` → `View Current Log`:
+   - Search for `obs-ltc-timecode` in the log
+   - If you see `"loading plugin (version ...)"` → plugin loads, issue is elsewhere
+   - If you see no mention of the plugin → OBS didn't find the DLL
+   - If you see `"error loading module"` → DLL dependency issue (see below)
+
+3. **Verify 64-bit OBS** — this plugin only works with 64-bit OBS Studio
+
+4. **Reinstall with the install script** — run `.\install.ps1` which verifies everything:
+   ```powershell
+   .\install.ps1
+   ```
 
 ### NTP sync fails / "Not synced — using local clock"
 

@@ -258,6 +258,66 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 ---
 
+### Epic 7: Installation & First-Run Experience (User Feedback)
+
+> Created from user testing feedback (2026-02-27): Plugin doesn't appear in OBS,
+> manual folder creation needed, setup too error-prone.
+
+#### TICKET-011: Windows Install Script & Installation Debugging
+- **Status:** `DONE`
+- **Depends on:** TICKET-006
+- **Type:** Enhancement / Tooling
+- **Description:** Create a PowerShell install script (`install.ps1`) that automates plugin installation on Windows. The script must handle the fact that `%APPDATA%\obs-studio\plugins` does NOT exist by default (OBS only creates `plugin_config`). Additionally, add verbose logging at plugin load time to help diagnose why the plugin might not appear in OBS.
+- **Acceptance Criteria:**
+  - [x] `install.ps1` script creates full folder structure (`plugins\obs-ltc-timecode\bin\64bit` + `data\locale`)
+  - [x] Script copies DLL and data files to correct locations
+  - [x] Script verifies the installation after copy (checks files exist, prints summary)
+  - [x] Script detects OBS installation and warns if not found
+  - [x] `install.sh` equivalent for Linux
+  - [x] README.md updated with install script usage
+  - [x] Setup.md Schritt 6 updated with note about `plugins` folder creation
+  - [x] `plugin-main.c` logs file paths on load for debugging
+- **User Feedback:** _"musste in %APPDATA%\obs-studio den plugins Ordner erstellen, weiß nicht ob das normal ist, es gab da nur plugin_config als Ordner"_
+- **Files:** `install.ps1` (new), `install.sh` (new), `src/plugin-main.c` (modified), `README.md` (modified), `Setup.md` (modified)
+
+#### TICKET-012: Auto-Setup on First Load (Auto-Add Source + Audio Track 3)
+- **Status:** `TODO`
+- **Depends on:** TICKET-011
+- **Type:** Feature
+- **Description:** When the plugin loads for the first time, automatically add the "LTC Timecode Generator" source to the current scene and configure OBS to route the LTC audio to a dedicated recording track (Track 3). This requires enabling `ENABLE_FRONTEND_API` in CMakeLists.txt and using `obs_frontend_add_event_callback()` to detect when OBS is fully initialized. A first-run flag prevents repeated auto-setup.
+- **Acceptance Criteria:**
+  - [ ] `ENABLE_FRONTEND_API` enabled in CMakeLists.txt
+  - [ ] On first plugin load: LTC source is automatically added to the current scene
+  - [ ] LTC source is routed to audio track 3 in recording output settings
+  - [ ] First-run flag stored in OBS config (prevents re-adding on every start)
+  - [ ] If source already exists (user added manually), skip auto-add
+  - [ ] Logging: clear messages about what was auto-configured
+  - [ ] Works on both Windows and Linux
+- **User Feedback:** _"wir sollten unbedingt machen dass der das template auch automatisch hinzufügt weil im template dann auch spur 3 mit den LTC sounds automatisch gemacht wird damit möglichst wenig verkackt werden kann"_
+- **Technical Notes:**
+  - Requires `obs-frontend-api`: `obs_frontend_get_current_scene()`, `obs_scene_add()`
+  - Audio track assignment: `obs_encoder_set_audio()` or output settings manipulation
+  - First-run check: `obs_data_get_bool(config, "auto_setup_done")`
+  - Must wait for `OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGED` or `OBS_FRONTEND_EVENT_FINISHED_LOADING` before accessing scenes
+- **Files:** `CMakeLists.txt` (modified), `src/plugin-main.c` (modified), `src/auto-setup.c` (new), `src/auto-setup.h` (new)
+
+#### TICKET-013: Plugin Load Diagnostics & OBS Version Verification
+- **Status:** `TODO`
+- **Depends on:** TICKET-006
+- **Type:** Bug Investigation / Enhancement
+- **Description:** User reports plugin doesn't appear in OBS Sources after installation. Add comprehensive diagnostics: verify OBS SDK version compatibility at build time, add runtime version checks, log all relevant paths and state during `obs_module_load()`. Also verify `buildspec.json` has correct OBS version for target.
+- **Acceptance Criteria:**
+  - [ ] `obs_module_load()` logs: OBS version, plugin path, locale load status
+  - [ ] `obs_module_description()` callback added (shows plugin info in OBS plugin dialog)
+  - [ ] `buildspec.json` verified against actual OBS 32.x SDK version
+  - [ ] If locale loading fails, plugin still loads with fallback names
+  - [ ] README troubleshooting section expanded with common load failures
+  - [ ] Checklist: what to check in OBS log when plugin doesn't appear
+- **User Feedback:** _"der erste Schritt geht schon nicht, da ist kein LTC Timecode Generator unter Sources +"_
+- **Files:** `src/plugin-main.c` (modified), `buildspec.json` (verified/updated), `README.md` (modified)
+
+---
+
 ## Decision Log
 
 | Date | Ticket | Decision | Rationale | Alternatives Considered |
@@ -279,6 +339,7 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 | Session | Date | Agent | Tickets Worked | Status at End | Notes |
 |---------|------|-------|----------------|---------------|-------|
+| 4 | 2026-02-27 | Claude Opus 4.6 | TICKET-011, TICKET-012, TICKET-013 (created) | In progress | User feedback session: Plugin doesn't appear in OBS, needs install script, wants auto-setup (source + track 3). Created Epic 7 with 3 new tickets. Working on TICKET-011 (install scripts + diagnostics). |
 | 3 | 2026-02-27 | Claude Opus 4.6 | TICKET-009 | README & docs done | Wrote comprehensive user-facing README.md: install instructions (Win/Linux), usage guide, multi-camera sync workflow, configuration reference, troubleshooting/FAQ, build-from-source guide, technical details. TICKET-008 skipped (requires physical 2-PC hardware test). TICKET-010 left for user (release tagging). |
 | 2 | 2026-02-27 | Claude Opus 4.6 | TICKET-008 (partial) | DaVinci Resolve compat fixes done | Fixed obs_log build error (missing plugin-support.h include). Replaced blind hard-resync with drift-aware resync (750 frame interval, 2 frame threshold). Added ContinuousTimecodeSequence25fps test. All 27 tests pass. |
 | 1 | 2026-02-27 | Claude Opus 4.6 | TICKET-001 through TICKET-007 | All 7 tickets DONE | Full integration: NTP sync thread, LTC audio gen, Properties UI. Fixed ltc_encoder_create bug (was passing SPF instead of FPS). All 26 unit tests pass. |
@@ -296,6 +357,8 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 4. **Drop-frame timecode:** 29.97 fps requires drop-frame handling. Must verify DaVinci Resolve's expectations.
 5. **OBS 32 plugin validation:** OBS 32 has stricter plugin loading on Linux. Must build against correct `LIBOBS_API_VER`.
 6. **Sample-accurate frame boundaries:** LTC frames must align with audio sample boundaries. Off-by-one errors cause decode failures.
+7. **Windows plugins folder:** `%APPDATA%\obs-studio\plugins` does NOT exist by default. OBS only creates `plugin_config`. Users must create `plugins` manually or use install script.
+8. **Plugin not appearing in OBS:** User reports plugin doesn't show in Sources. Need to verify: correct file paths, OBS version compat, locale files present, DLL dependencies resolved.
 
 ---
 

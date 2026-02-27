@@ -201,7 +201,25 @@ Extensions installieren:
 
 ## Schritt 6: Plugin in OBS testen
 
-### Windows
+### Option A: Install-Skript verwenden (empfohlen)
+
+```powershell
+# Windows (PowerShell)
+.\install.ps1
+
+# Linux (Bash)
+chmod +x install.sh
+./install.sh
+```
+
+Das Skript erstellt automatisch die korrekte Ordnerstruktur und kopiert alle Dateien.
+
+### Option B: Manuell kopieren
+
+> **Wichtig:** Der Ordner `%APPDATA%\obs-studio\plugins` existiert standardmäßig **NICHT**.
+> OBS erstellt nur `plugin_config`. Du musst `plugins` selbst anlegen — das ist normales OBS-Verhalten.
+
+#### Windows
 
 ```powershell
 # Plugin-Binary kopieren
@@ -213,7 +231,7 @@ Copy-Item "build_x64\Release\obs-ltc-timecode.dll" "$OBS_PLUGINS\bin\64bit\"
 Copy-Item -Recurse "data\*" "$OBS_PLUGINS\data\"
 ```
 
-### Linux
+#### Linux
 
 ```bash
 # Plugin-Binary kopieren
@@ -227,10 +245,17 @@ cp -r data/* "$OBS_PLUGINS/data/"
 
 ### In OBS verifizieren
 
-1. OBS starten
+1. OBS starten (komplett neu starten falls es schon lief)
 2. **Quellen** → **"+"** → Es sollte **"LTC Timecode Generator"** in der Liste erscheinen
 3. Quelle hinzufügen → Im Audio-Mixer sollte ein stiller Kanal erscheinen
 4. Im Properties-Panel: NTP Status und Framerate-Auswahl prüfen
+
+### Falls das Plugin nicht erscheint
+
+1. Prüfe **Hilfe** → **Log-Dateien** → **Aktuelles Log anzeigen**
+2. Suche nach `obs-ltc-timecode` im Log
+3. Prüfe ob die Ordnerstruktur exakt stimmt: `plugins\obs-ltc-timecode\bin\64bit\obs-ltc-timecode.dll`
+4. Prüfe ob `data\locale\en-US.ini` vorhanden ist
 
 ---
 
