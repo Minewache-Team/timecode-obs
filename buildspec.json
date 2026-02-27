@@ -33,7 +33,7 @@
     },
     "platformConfig": {
         "macos": {
-            "bundleId": "com.example.plugintemplate-for-obs"
+            "bundleId": "com.ferdmusic.obs-ltc-timecode"
         }
     },
     "name": "obs-ltc-timecode",
