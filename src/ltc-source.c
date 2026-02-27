@@ -1,30 +1,258 @@
 /*
  * ltc-source.c - OBS audio source for LTC timecode output
  *
- * Implements the OBS source callbacks: create, destroy, get_name,
- * get_properties, get_defaults, update, and audio output via timer.
+ * Integrates NTP sync, SMPTE timecode generation, and LTC audio encoding.
+ * Outputs continuous LTC audio via OBS's audio pipeline.
  *
- * Currently outputs silence as proof of life (TICKET-001 skeleton).
+ * Threading model:
+ *   - video_tick runs on OBS video thread: reads ntp_offset_ms, uses encoder
+ *   - NTP sync thread: writes ntp_offset_ms periodically
+ *   - update runs on OBS main thread: may recreate encoder (protected by mutex)
  */
 
 #include "ltc-source.h"
+#include "ntp-client.h"
+#include "timecode.h"
+#include "ltc-encoder-wrapper.h"
+
 #include <obs-module.h>
 #include <util/platform.h>
+#include <util/threading.h>
 
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 #define SAMPLE_RATE 48000
-#define NUM_CHANNELS 1
-#define AUDIO_BUF_FRAMES 4800 /* 100ms at 48kHz */
+#define AUDIO_BUF_FRAMES 9600 /* 200ms at 48kHz */
+#define MAX_FRAME_SAMPLES 4000 /* max samples per LTC frame (48000/24 = 2000) */
+#define NTP_QUERY_TIMEOUT_MS 2000
+#define NTP_RETRY_COUNT 3
+#define EMA_ALPHA 0.3
+#define RESYNC_CHECK_FRAMES 150 /* re-check wall clock every ~5s at 30fps */
+
+/* Settings keys */
+#define S_FRAMERATE "framerate"
+#define S_NTP_SERVER "ntp_server"
+#define S_SYNC_INTERVAL "sync_interval"
 
 struct ltc_source_context {
 	obs_source_t *source;
 
-	/* Audio buffer (silence for now) */
+	/* LTC encoder (protected by encoder_mutex for recreation) */
+	ltc_wrapper_t *encoder;
+	pthread_mutex_t encoder_mutex;
+	tc_framerate_t framerate;
+	int nominal_fps;
+
+	/* Per-frame encode buffer */
+	float frame_buf[MAX_FRAME_SAMPLES];
+	int frame_samples_total;
+	int frame_pos;
+	bool frame_valid;
+
+	/* Audio output buffer */
 	float audio_buf[AUDIO_BUF_FRAMES];
 	struct obs_source_audio audio_output;
+	uint64_t next_audio_ts;
+
+	/* NTP sync thread */
+	pthread_t ntp_thread;
+	os_event_t *stop_event;
+	bool thread_created;
+	char ntp_server[256];
+	int sync_interval_sec;
+
+	/* NTP offset (written by NTP thread, read by video_tick) */
+	volatile int64_t ntp_offset_ms;
+	volatile bool ntp_synced;
+	volatile int64_t ntp_roundtrip_ms;
+	bool first_sync_done;
+
+	/* Timecode re-sync tracking */
+	uint64_t frames_encoded;
 };
+
+/* ---- NTP sync thread ---- */
+
+static void *ntp_sync_thread(void *data)
+{
+	struct ltc_source_context *ctx = data;
+
+	os_set_thread_name("ltc-ntp-sync");
+
+	while (os_event_timedwait(ctx->stop_event, 0) != 0) {
+		ntp_result_t result;
+		bool success = false;
+
+		for (int attempt = 0; attempt < NTP_RETRY_COUNT; attempt++) {
+			if (os_event_try(ctx->stop_event) == 0)
+				return NULL;
+
+			if (ntp_query(ctx->ntp_server, NTP_QUERY_TIMEOUT_MS, &result)) {
+				success = true;
+				break;
+			}
+		}
+
+		if (success) {
+			if (!ctx->first_sync_done) {
+				ctx->ntp_offset_ms = result.offset_ms;
+				ctx->first_sync_done = true;
+			} else {
+				int64_t old = ctx->ntp_offset_ms;
+				int64_t smoothed = (int64_t)(
+					EMA_ALPHA * (double)result.offset_ms +
+					(1.0 - EMA_ALPHA) * (double)old);
+				ctx->ntp_offset_ms = smoothed;
+			}
+			ctx->ntp_roundtrip_ms = result.roundtrip_ms;
+			ctx->ntp_synced = true;
+		}
+
+		if (os_event_timedwait(ctx->stop_event,
+				       (unsigned long)ctx->sync_interval_sec * 1000) == 0)
+			return NULL;
+	}
+
+	return NULL;
+}
+
+static void start_ntp_thread(struct ltc_source_context *ctx)
+{
+	if (ctx->thread_created)
+		return;
+
+	if (os_event_init(&ctx->stop_event, OS_EVENT_TYPE_MANUAL) != 0)
+		return;
+
+	if (pthread_create(&ctx->ntp_thread, NULL, ntp_sync_thread, ctx) == 0) {
+		ctx->thread_created = true;
+	} else {
+		os_event_destroy(ctx->stop_event);
+		ctx->stop_event = NULL;
+	}
+}
+
+static void stop_ntp_thread(struct ltc_source_context *ctx)
+{
+	if (!ctx->thread_created)
+		return;
+
+	os_event_signal(ctx->stop_event);
+	pthread_join(ctx->ntp_thread, NULL);
+	os_event_destroy(ctx->stop_event);
+	ctx->stop_event = NULL;
+	ctx->thread_created = false;
+}
+
+/* ---- Framerate helpers ---- */
+
+static tc_framerate_t detect_obs_framerate(void)
+{
+	struct obs_video_info ovi;
+	if (!obs_get_video_info(&ovi))
+		return TC_FPS_25;
+
+	double fps = (double)ovi.fps_num / (double)ovi.fps_den;
+
+	if (fabs(fps - 23.976) < 0.5)
+		return TC_FPS_24;
+	if (fabs(fps - 24.0) < 0.5)
+		return TC_FPS_24;
+	if (fabs(fps - 25.0) < 0.5)
+		return TC_FPS_25;
+	if (fabs(fps - 29.97) < 0.5)
+		return TC_FPS_29_97_DF;
+	if (fabs(fps - 30.0) < 0.5)
+		return TC_FPS_30;
+	if (fabs(fps - 50.0) < 1.0)
+		return TC_FPS_50;
+	if (fabs(fps - 59.94) < 1.0)
+		return TC_FPS_60;
+	if (fabs(fps - 60.0) < 1.0)
+		return TC_FPS_60;
+
+	return TC_FPS_25;
+}
+
+static int fps_nominal(tc_framerate_t fps)
+{
+	switch (fps) {
+	case TC_FPS_24:
+		return 24;
+	case TC_FPS_25:
+		return 25;
+	case TC_FPS_29_97_DF:
+		return 30;
+	case TC_FPS_30:
+		return 30;
+	case TC_FPS_50:
+		return 50;
+	case TC_FPS_60:
+		return 60;
+	default:
+		return 25;
+	}
+}
+
+/* ---- Encoder lifecycle ---- */
+
+static void create_encoder(struct ltc_source_context *ctx)
+{
+	ctx->encoder = ltc_wrapper_create(SAMPLE_RATE, ctx->framerate);
+	ctx->nominal_fps = fps_nominal(ctx->framerate);
+	ctx->frame_valid = false;
+	ctx->frame_pos = 0;
+	ctx->frame_samples_total = 0;
+	ctx->frames_encoded = 0;
+}
+
+static void recreate_encoder(struct ltc_source_context *ctx, tc_framerate_t new_fps)
+{
+	pthread_mutex_lock(&ctx->encoder_mutex);
+	if (ctx->encoder) {
+		ltc_wrapper_destroy(ctx->encoder);
+		ctx->encoder = NULL;
+	}
+	ctx->framerate = new_fps;
+	create_encoder(ctx);
+	pthread_mutex_unlock(&ctx->encoder_mutex);
+}
+
+/* ---- Audio generation ---- */
+
+static void encode_next_frame(struct ltc_source_context *ctx)
+{
+	if (!ctx->encoder)
+		return;
+
+	bool need_sync = !ctx->frame_valid ||
+			 (ctx->frames_encoded % RESYNC_CHECK_FRAMES == 0);
+
+	if (need_sync) {
+		int64_t sec, usec;
+		ntp_corrected_time(ctx->ntp_offset_ms, &sec, &usec);
+
+		smpte_timecode_t tc;
+		timecode_from_unix(sec, usec, ctx->framerate, &tc);
+		ltc_wrapper_set_timecode(ctx->encoder, tc.hours, tc.minutes,
+					tc.seconds, tc.frames);
+	} else {
+		ltc_wrapper_inc_timecode(ctx->encoder);
+	}
+
+	ctx->frame_samples_total =
+		ltc_wrapper_encode_frame(ctx->encoder, ctx->frame_buf, MAX_FRAME_SAMPLES);
+
+	if (ctx->frame_samples_total > 0) {
+		ctx->frame_valid = true;
+		ctx->frame_pos = 0;
+		ctx->frames_encoded++;
+	} else {
+		ctx->frame_valid = false;
+	}
+}
 
 static const char *ltc_source_get_name(void *unused)
 {
@@ -32,39 +260,108 @@ static const char *ltc_source_get_name(void *unused)
 	return obs_module_text("LTCTimecodeGenerator");
 }
 
-/*
- * video_tick callback - called every video frame by OBS.
- * Used to output silence (or later: LTC audio) to the audio pipeline.
- */
 static void ltc_source_video_tick(void *data, float seconds)
 {
-	(void)seconds;
 	struct ltc_source_context *ctx = data;
 	if (!ctx || !ctx->source)
 		return;
 
-	/* Output silence (zero-filled buffer) */
-	memset(ctx->audio_buf, 0, sizeof(ctx->audio_buf));
+	pthread_mutex_lock(&ctx->encoder_mutex);
+
+	if (!ctx->encoder) {
+		pthread_mutex_unlock(&ctx->encoder_mutex);
+		return;
+	}
+
+	int samples_needed = (int)(seconds * SAMPLE_RATE);
+	if (samples_needed <= 0)
+		samples_needed = SAMPLE_RATE / 30;
+	if (samples_needed > AUDIO_BUF_FRAMES)
+		samples_needed = AUDIO_BUF_FRAMES;
+
+	int buf_pos = 0;
+	while (buf_pos < samples_needed) {
+		if (!ctx->frame_valid || ctx->frame_pos >= ctx->frame_samples_total) {
+			encode_next_frame(ctx);
+			if (!ctx->frame_valid)
+				break;
+		}
+
+		int remaining_in_frame = ctx->frame_samples_total - ctx->frame_pos;
+		int remaining_in_buf = samples_needed - buf_pos;
+		int to_copy = remaining_in_frame < remaining_in_buf
+				      ? remaining_in_frame
+				      : remaining_in_buf;
+
+		memcpy(&ctx->audio_buf[buf_pos],
+		       &ctx->frame_buf[ctx->frame_pos],
+		       (size_t)to_copy * sizeof(float));
+
+		buf_pos += to_copy;
+		ctx->frame_pos += to_copy;
+	}
+
+	if (buf_pos < samples_needed) {
+		memset(&ctx->audio_buf[buf_pos], 0,
+		       (size_t)(samples_needed - buf_pos) * sizeof(float));
+	}
+
+	pthread_mutex_unlock(&ctx->encoder_mutex);
+
+	uint64_t now = os_gettime_ns();
+	if (ctx->next_audio_ts == 0 ||
+	    now > ctx->next_audio_ts + 200000000ULL ||
+	    ctx->next_audio_ts > now + 200000000ULL) {
+		ctx->next_audio_ts = now;
+	}
 
 	ctx->audio_output.data[0] = (uint8_t *)ctx->audio_buf;
-	ctx->audio_output.frames = AUDIO_BUF_FRAMES;
-	ctx->audio_output.timestamp = os_gettime_ns();
+	ctx->audio_output.frames = (uint32_t)samples_needed;
+	ctx->audio_output.timestamp = ctx->next_audio_ts;
 	ctx->audio_output.samples_per_sec = SAMPLE_RATE;
 	ctx->audio_output.speakers = SPEAKERS_MONO;
 	ctx->audio_output.format = AUDIO_FORMAT_FLOAT;
 
 	obs_source_output_audio(ctx->source, &ctx->audio_output);
+
+	ctx->next_audio_ts += (uint64_t)samples_needed * 1000000000ULL / SAMPLE_RATE;
 }
+
+/* ---- OBS source callbacks ---- */
 
 static void *ltc_source_create(obs_data_t *settings, obs_source_t *source)
 {
-	(void)settings;
-
 	struct ltc_source_context *ctx = bzalloc(sizeof(struct ltc_source_context));
 	ctx->source = source;
+	ctx->ntp_offset_ms = 0;
+	ctx->ntp_synced = false;
+	ctx->first_sync_done = false;
+	ctx->next_audio_ts = 0;
 
-	memset(ctx->audio_buf, 0, sizeof(ctx->audio_buf));
+	pthread_mutex_init(&ctx->encoder_mutex, NULL);
 	memset(&ctx->audio_output, 0, sizeof(ctx->audio_output));
+
+	int fps_setting = (int)obs_data_get_int(settings, S_FRAMERATE);
+	if (fps_setting == 0)
+		ctx->framerate = detect_obs_framerate();
+	else
+		ctx->framerate = (tc_framerate_t)fps_setting;
+
+	const char *server = obs_data_get_string(settings, S_NTP_SERVER);
+	if (server && *server)
+		snprintf(ctx->ntp_server, sizeof(ctx->ntp_server), "%s", server);
+	else
+		snprintf(ctx->ntp_server, sizeof(ctx->ntp_server), "pool.ntp.org");
+
+	ctx->sync_interval_sec = (int)obs_data_get_int(settings, S_SYNC_INTERVAL);
+	if (ctx->sync_interval_sec <= 0)
+		ctx->sync_interval_sec = 300;
+
+	create_encoder(ctx);
+	start_ntp_thread(ctx);
+
+	obs_log(LOG_INFO, "LTC source created (fps=%d, server=%s, interval=%ds)",
+		ctx->nominal_fps, ctx->ntp_server, ctx->sync_interval_sec);
 
 	return ctx;
 }
@@ -75,32 +372,106 @@ static void ltc_source_destroy(void *data)
 	if (!ctx)
 		return;
 
+	stop_ntp_thread(ctx);
+
+	pthread_mutex_lock(&ctx->encoder_mutex);
+	if (ctx->encoder) {
+		ltc_wrapper_destroy(ctx->encoder);
+		ctx->encoder = NULL;
+	}
+	pthread_mutex_unlock(&ctx->encoder_mutex);
+	pthread_mutex_destroy(&ctx->encoder_mutex);
+
+	obs_log(LOG_INFO, "LTC source destroyed");
+
 	bfree(ctx);
 }
 
+static void ltc_source_update(void *data, obs_data_t *settings)
+{
+	struct ltc_source_context *ctx = data;
+	if (!ctx)
+		return;
+
+	int fps_setting = (int)obs_data_get_int(settings, S_FRAMERATE);
+	tc_framerate_t new_fps;
+	if (fps_setting == 0)
+		new_fps = detect_obs_framerate();
+	else
+		new_fps = (tc_framerate_t)fps_setting;
+
+	if (new_fps != ctx->framerate)
+		recreate_encoder(ctx, new_fps);
+
+	const char *server = obs_data_get_string(settings, S_NTP_SERVER);
+	if (server && *server)
+		snprintf(ctx->ntp_server, sizeof(ctx->ntp_server), "%s", server);
+
+	int interval = (int)obs_data_get_int(settings, S_SYNC_INTERVAL);
+	if (interval > 0)
+		ctx->sync_interval_sec = interval;
+}
+
+/* ---- Properties UI ---- */
+
 static obs_properties_t *ltc_source_get_properties(void *data)
 {
-	(void)data;
-
+	struct ltc_source_context *ctx = data;
 	obs_properties_t *props = obs_properties_create();
 
-	/* Placeholder: properties will be added in TICKET-007 */
+	/* Framerate dropdown */
+	obs_property_t *fps_prop = obs_properties_add_list(
+		props, S_FRAMERATE, obs_module_text("Framerate"),
+		OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+	obs_property_list_add_int(fps_prop, obs_module_text("FramerateAuto"), 0);
+	obs_property_list_add_int(fps_prop, "24 fps", TC_FPS_24);
+	obs_property_list_add_int(fps_prop, "25 fps", TC_FPS_25);
+	obs_property_list_add_int(fps_prop, "29.97 fps (Drop-Frame)", TC_FPS_29_97_DF);
+	obs_property_list_add_int(fps_prop, "30 fps", TC_FPS_30);
+	obs_property_list_add_int(fps_prop, "50 fps", TC_FPS_50);
+	obs_property_list_add_int(fps_prop, "60 fps", TC_FPS_60);
+
+	/* NTP server */
+	obs_properties_add_text(props, S_NTP_SERVER,
+				obs_module_text("NTPServer"), OBS_TEXT_DEFAULT);
+
+	/* Sync interval dropdown */
+	obs_property_t *interval_prop = obs_properties_add_list(
+		props, S_SYNC_INTERVAL, obs_module_text("NTPSyncInterval"),
+		OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+	obs_property_list_add_int(interval_prop, "1 min", 60);
+	obs_property_list_add_int(interval_prop, "5 min", 300);
+	obs_property_list_add_int(interval_prop, "10 min", 600);
+	obs_property_list_add_int(interval_prop, "30 min", 1800);
+
+	/* NTP status (informational) */
+	obs_properties_add_text(props, "_ntp_status",
+				obs_module_text("NTPStatus"), OBS_TEXT_INFO);
+
+	/* Current timecode display */
+	if (ctx) {
+		int64_t sec, usec;
+		ntp_corrected_time(ctx->ntp_offset_ms, &sec, &usec);
+		smpte_timecode_t tc;
+		char tc_buf[16];
+		timecode_from_unix(sec, usec, ctx->framerate, &tc);
+		timecode_to_string(&tc, tc_buf, sizeof(tc_buf));
+	}
+
+	obs_properties_add_text(props, "_timecode",
+				obs_module_text("CurrentTimecode"), OBS_TEXT_INFO);
 
 	return props;
 }
 
 static void ltc_source_get_defaults(obs_data_t *settings)
 {
-	(void)settings;
-	/* Defaults will be added in TICKET-007 */
+	obs_data_set_default_int(settings, S_FRAMERATE, 0);
+	obs_data_set_default_string(settings, S_NTP_SERVER, "pool.ntp.org");
+	obs_data_set_default_int(settings, S_SYNC_INTERVAL, 300);
 }
 
-static void ltc_source_update(void *data, obs_data_t *settings)
-{
-	(void)data;
-	(void)settings;
-	/* Update logic will be added in TICKET-007 */
-}
+/* ---- Source registration ---- */
 
 static struct obs_source_info ltc_source_info = {
 	.id = "obs_ltc_timecode_source",

@@ -20,7 +20,7 @@ target_link_libraries(test-timecode PRIVATE GTest::gtest_main)
 add_test(NAME TimecodeTests COMMAND test-timecode)
 
 # --- test-ntp-offset ---
-add_executable(test-ntp-offset test-ntp-offset.cpp)
+add_executable(test-ntp-offset test-ntp-offset.cpp "${CMAKE_SOURCE_DIR}/src/ntp-client.c")
 target_link_libraries(test-ntp-offset PRIVATE GTest::gtest_main)
 add_test(NAME NTPOffsetTests COMMAND test-ntp-offset)
 
