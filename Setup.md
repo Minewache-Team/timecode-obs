@@ -213,17 +213,19 @@ chmod +x install.sh
 ```
 
 Das Skript erstellt automatisch die korrekte Ordnerstruktur und kopiert alle Dateien.
+PowerShell muss ggf. als Administrator gestartet werden (Rechtsklick → "Als Administrator ausführen").
 
 ### Option B: Manuell kopieren
 
-> **Wichtig:** Der Ordner `%APPDATA%\obs-studio\plugins` existiert standardmäßig **NICHT**.
-> OBS erstellt nur `plugin_config`. Du musst `plugins` selbst anlegen — das ist normales OBS-Verhalten.
+> **WICHTIG:** OBS lädt Plugins **NICHT** aus `%APPDATA%\obs-studio\plugins\`!
+> Der korrekte Pfad ist `C:\ProgramData\obs-studio\plugins\` (= `%ProgramData%`).
+> `%APPDATA%` ist nur für OBS-Einstellungen, nicht für Plugin-Binaries.
 
 #### Windows
 
 ```powershell
-# Plugin-Binary kopieren
-$OBS_PLUGINS = "$env:APPDATA\obs-studio\plugins\obs-ltc-timecode"
+# Plugin-Binary kopieren (ACHTUNG: ProgramData, NICHT AppData!)
+$OBS_PLUGINS = "$env:ProgramData\obs-studio\plugins\obs-ltc-timecode"
 New-Item -ItemType Directory -Force -Path "$OBS_PLUGINS\bin\64bit"
 New-Item -ItemType Directory -Force -Path "$OBS_PLUGINS\data"
 
@@ -252,10 +254,11 @@ cp -r data/* "$OBS_PLUGINS/data/"
 
 ### Falls das Plugin nicht erscheint
 
-1. Prüfe **Hilfe** → **Log-Dateien** → **Aktuelles Log anzeigen**
-2. Suche nach `obs-ltc-timecode` im Log
-3. Prüfe ob die Ordnerstruktur exakt stimmt: `plugins\obs-ltc-timecode\bin\64bit\obs-ltc-timecode.dll`
-4. Prüfe ob `data\locale\en-US.ini` vorhanden ist
+1. **Richtiger Ordner?** Plugin muss in `C:\ProgramData\obs-studio\plugins\` liegen, NICHT in `%APPDATA%`!
+2. Prüfe **Hilfe** → **Log-Dateien** → **Aktuelles Log anzeigen**
+3. Suche nach `obs-ltc-timecode` im Log
+4. Prüfe ob die Ordnerstruktur exakt stimmt: `plugins\obs-ltc-timecode\bin\64bit\obs-ltc-timecode.dll`
+5. Prüfe ob `data\locale\en-US.ini` vorhanden ist
 
 ---
 

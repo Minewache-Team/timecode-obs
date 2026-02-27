@@ -5,8 +5,8 @@
 #   .\install.ps1 -BuildDir "path"   # Install from custom build directory
 #   .\install.ps1 -Uninstall         # Remove the plugin
 #
-# This script handles the fact that %APPDATA%\obs-studio\plugins does NOT exist
-# by default in OBS Studio. OBS only creates plugin_config on first run.
+# IMPORTANT: OBS Studio loads plugins from C:\ProgramData\obs-studio\plugins\
+# NOT from %APPDATA%\obs-studio\plugins\ (AppData is only for settings/config).
 
 param(
     [string]$BuildDir = "",
@@ -16,9 +16,12 @@ param(
 $ErrorActionPreference = "Stop"
 
 $PluginName = "obs-ltc-timecode"
-$ObsAppData = "$env:APPDATA\obs-studio"
-$PluginDir = "$ObsAppData\plugins\$PluginName"
+$ObsProgramData = "$env:ProgramData\obs-studio"
+$PluginDir = "$ObsProgramData\plugins\$PluginName"
 $DllName = "$PluginName.dll"
+
+# Legacy wrong path (for cleanup/migration)
+$LegacyPluginDir = "$env:APPDATA\obs-studio\plugins\$PluginName"
 
 function Write-Header {
     Write-Host ""
@@ -66,17 +69,36 @@ function Test-ObsInstalled {
 # --- Uninstall ---
 if ($Uninstall) {
     Write-Header
+    $removed = $false
     if (Test-Path $PluginDir) {
         Remove-Item -Recurse -Force $PluginDir
         Write-Host "[OK] Plugin removed from: $PluginDir" -ForegroundColor Green
-    } else {
-        Write-Host "[INFO] Plugin not installed at: $PluginDir" -ForegroundColor Yellow
+        $removed = $true
+    }
+    if (Test-Path $LegacyPluginDir) {
+        Remove-Item -Recurse -Force $LegacyPluginDir
+        Write-Host "[OK] Removed legacy install from: $LegacyPluginDir" -ForegroundColor Green
+        $removed = $true
+    }
+    if (-not $removed) {
+        Write-Host "[INFO] Plugin not installed." -ForegroundColor Yellow
     }
     exit 0
 }
 
 # --- Install ---
 Write-Header
+
+# Step 0: Check for legacy install and clean up
+if (Test-Path $LegacyPluginDir) {
+    Write-Host "[WARN] Found plugin in WRONG location (AppData):" -ForegroundColor Yellow
+    Write-Host "       $LegacyPluginDir" -ForegroundColor Yellow
+    Write-Host "       OBS does NOT load plugins from AppData!" -ForegroundColor Yellow
+    Write-Host "       Removing legacy install..." -ForegroundColor Yellow
+    Remove-Item -Recurse -Force $LegacyPluginDir
+    Write-Host "[OK] Legacy install removed." -ForegroundColor Green
+    Write-Host ""
+}
 
 # Step 1: Check OBS is installed
 $obsExe = Test-ObsInstalled
@@ -123,36 +145,36 @@ if (-not (Test-Path (Join-Path $DataDir "locale\en-US.ini"))) {
 }
 Write-Host "[OK] Locale data found: $DataDir" -ForegroundColor Green
 
-# Step 4: Check OBS AppData directory
-if (-not (Test-Path $ObsAppData)) {
-    Write-Host "[ERROR] OBS data directory not found: $ObsAppData" -ForegroundColor Red
-    Write-Host "        Run OBS Studio at least once before installing plugins." -ForegroundColor Red
-    exit 1
-}
-Write-Host "[OK] OBS data directory exists: $ObsAppData" -ForegroundColor Green
-
-# Step 5: Create plugins folder structure
-# NOTE: %APPDATA%\obs-studio\plugins does NOT exist by default.
-# OBS only creates plugin_config on first run. This is normal.
+# Step 4: Create plugin directory structure in ProgramData
+# NOTE: C:\ProgramData\obs-studio\plugins\ is where OBS loads third-party plugins from.
+# This directory may not exist yet if no plugins have been installed before.
 $binDir = "$PluginDir\bin\64bit"
 $dataDestDir = "$PluginDir\data"
 
-if (-not (Test-Path "$ObsAppData\plugins")) {
-    Write-Host "[INFO] Creating plugins directory (does not exist by default, this is normal)" -ForegroundColor Yellow
+if (-not (Test-Path "$ObsProgramData\plugins")) {
+    Write-Host "[INFO] Creating ProgramData plugins directory (normal for first plugin install)" -ForegroundColor Yellow
 }
 
-New-Item -ItemType Directory -Force -Path $binDir | Out-Null
-New-Item -ItemType Directory -Force -Path $dataDestDir | Out-Null
+try {
+    New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+    New-Item -ItemType Directory -Force -Path $dataDestDir | Out-Null
+} catch {
+    Write-Host "[ERROR] Cannot create directory: $PluginDir" -ForegroundColor Red
+    Write-Host "        You may need to run PowerShell as Administrator." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "  Right-click PowerShell -> 'Run as administrator', then retry." -ForegroundColor Cyan
+    exit 1
+}
 Write-Host "[OK] Plugin directory created: $PluginDir" -ForegroundColor Green
 
-# Step 6: Copy files
+# Step 5: Copy files
 Copy-Item $DllPath "$binDir\" -Force
 Write-Host "[OK] Copied: $DllName -> $binDir\" -ForegroundColor Green
 
 Copy-Item -Recurse -Force "$DataDir\*" "$dataDestDir\"
 Write-Host "[OK] Copied: data\ -> $dataDestDir\" -ForegroundColor Green
 
-# Step 7: Verify installation
+# Step 6: Verify installation
 Write-Host ""
 Write-Host "--- Verification ---" -ForegroundColor Cyan
 
@@ -176,12 +198,12 @@ Write-Host ""
 if ($allOk) {
     Write-Host "Installation successful!" -ForegroundColor Green
     Write-Host ""
+    Write-Host "Installed to: $PluginDir" -ForegroundColor Cyan
+    Write-Host ""
     Write-Host "Next steps:" -ForegroundColor Cyan
-    Write-Host "  1. Restart OBS Studio (close and reopen)" -ForegroundColor White
+    Write-Host "  1. Restart OBS Studio (close completely and reopen)" -ForegroundColor White
     Write-Host "  2. Go to Sources -> + -> 'LTC Timecode Generator'" -ForegroundColor White
     Write-Host "  3. Check Help -> Log Files if the source doesn't appear" -ForegroundColor White
-    Write-Host ""
-    Write-Host "Installed to: $PluginDir" -ForegroundColor Gray
 } else {
     Write-Host "Installation completed with errors. Check the messages above." -ForegroundColor Red
     exit 1

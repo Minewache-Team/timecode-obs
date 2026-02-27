@@ -42,9 +42,12 @@ After building (or extracting a release), run the install script from the projec
 ```
 
 The script automatically:
-- Creates the `plugins` folder if it doesn't exist (this is normal — OBS doesn't create it by default)
-- Copies the DLL and locale data to the correct paths
+- Installs to the correct OBS plugin directory (`C:\ProgramData\obs-studio\plugins\`)
+- Creates the folder structure if needed
+- Removes any old installs from the wrong path (AppData)
 - Verifies the installation
+
+> **Note:** You may need to run PowerShell as Administrator since `C:\ProgramData` requires write permissions.
 
 To uninstall: `.\install.ps1 -Uninstall`
 
@@ -52,26 +55,20 @@ To uninstall: `.\install.ps1 -Uninstall`
 
 1. Download the latest release `.zip` from the [Releases](../../releases) page
 2. Extract the archive
-3. Copy the contents to your OBS plugins folder:
-   ```
-   %APPDATA%\obs-studio\plugins\obs-ltc-timecode\
-   ```
+3. Copy the contents to the OBS **ProgramData** plugins folder:
 
-   > **Note:** The `plugins` folder does NOT exist by default in `%APPDATA%\obs-studio\` —
-   > you'll only see `plugin_config`. You must create the `plugins` folder yourself. This is normal OBS behavior.
+   > **IMPORTANT:** The correct path is `C:\ProgramData\obs-studio\plugins\` — **NOT** `%APPDATA%\obs-studio\plugins\`!
+   > `%APPDATA%` is only for OBS settings/config, OBS does not load plugins from there.
 
    The folder structure should look like:
    ```
-   %APPDATA%\obs-studio\
-   ├── plugin_config\          ← already exists (OBS creates this)
-   └── plugins\                ← you create this
-       └── obs-ltc-timecode\
-           ├── bin\
-           │   └── 64bit\
-           │       └── obs-ltc-timecode.dll
-           └── data\
-               └── locale\
-                   └── en-US.ini
+   C:\ProgramData\obs-studio\plugins\obs-ltc-timecode\
+   ├── bin\
+   │   └── 64bit\
+   │       └── obs-ltc-timecode.dll
+   └── data\
+       └── locale\
+           └── en-US.ini
    ```
 4. Restart OBS Studio
 
@@ -141,21 +138,25 @@ The properties panel also shows:
 
 **Step-by-step checklist:**
 
-1. **Check the folder structure** — the most common issue:
-   - Windows: Open `%APPDATA%\obs-studio\plugins\obs-ltc-timecode\` in Explorer
-   - The `plugins` folder does NOT exist by default — you must create it (or use `install.ps1`)
+1. **Check you're using the RIGHT folder** — this is the #1 mistake:
+   - **Correct:** `C:\ProgramData\obs-studio\plugins\obs-ltc-timecode\`
+   - **WRONG:** `%APPDATA%\obs-studio\plugins\` — OBS does NOT load plugins from AppData!
+   - `%APPDATA%` (= `C:\Users\<name>\AppData\Roaming`) is only for OBS settings/config
+   - `%ProgramData%` (= `C:\ProgramData`) is where OBS looks for third-party plugins
+
+2. **Check the folder structure** inside the plugin directory:
    - Verify `bin\64bit\obs-ltc-timecode.dll` exists
    - Verify `data\locale\en-US.ini` exists
 
-2. **Check the OBS log** — `Help` → `Log Files` → `View Current Log`:
+3. **Check the OBS log** — `Help` → `Log Files` → `View Current Log`:
    - Search for `obs-ltc-timecode` in the log
    - If you see `"loading plugin (version ...)"` → plugin loads, issue is elsewhere
-   - If you see no mention of the plugin → OBS didn't find the DLL
-   - If you see `"error loading module"` → DLL dependency issue (see below)
+   - If you see no mention of the plugin → OBS didn't find the DLL (wrong path)
+   - If you see `"error loading module"` → DLL dependency issue
 
-3. **Verify 64-bit OBS** — this plugin only works with 64-bit OBS Studio
+4. **Verify 64-bit OBS** — this plugin only works with 64-bit OBS Studio
 
-4. **Reinstall with the install script** — run `.\install.ps1` which verifies everything:
+5. **Reinstall with the install script** — uses the correct path automatically:
    ```powershell
    .\install.ps1
    ```
