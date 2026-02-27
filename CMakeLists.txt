@@ -6,15 +6,20 @@ project(${_name} VERSION ${_version})
 
 option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" OFF)
 option(ENABLE_QT "Use Qt functionality" OFF)
+option(BUILD_TESTS "Build unit tests" OFF)
 
 include(compilerconfig)
 include(defaults)
 include(helpers)
 
+# Build libltc from submodule
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/BuildLibLTC.cmake")
+
 add_library(${CMAKE_PROJECT_NAME} MODULE)
 
 find_package(libobs REQUIRED)
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::libobs)
+target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE libltc)
 
 if(ENABLE_FRONTEND_API)
   find_package(obs-frontend-api REQUIRED)
@@ -34,6 +39,30 @@ if(ENABLE_QT)
   )
 endif()
 
-target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/plugin-main.c)
+# Windows: link Winsock2 for NTP client
+if(WIN32)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE ws2_32)
+endif()
+
+target_sources(
+  ${CMAKE_PROJECT_NAME}
+  PRIVATE src/plugin-main.c
+          src/ltc-source.c
+          src/ltc-source.h
+          src/ntp-client.c
+          src/ntp-client.h
+          src/timecode.c
+          src/timecode.h
+          src/ltc-encoder-wrapper.c
+          src/ltc-encoder-wrapper.h
+)
+
+target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
+
+# Tests
+if(BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(tests)
+endif()

@@ -7,14 +7,21 @@
 !/cmake
 !/data
 !/src
+!/deps
+!/tests
+!/docs
 !.clang-format
 !.gersemirc
 !.gitignore
+!.gitmodules
 !buildspec.json
 !CMakeLists.txt
 !CMakePresets.json
 !LICENSE
 !README.md
+!PROJECT.md
+!Setup.md
+!SYSTEM_PROMPT.md
 
 # Exclude lock files
 *.lock.json
