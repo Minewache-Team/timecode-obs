@@ -92,11 +92,19 @@ static void *ntp_sync_thread(void *data)
 		ntp_result_t result;
 		bool success = false;
 
+		/* Copy server name under lock to avoid data race with update */
+		char server_copy[256];
+		pthread_mutex_lock(&ctx->encoder_mutex);
+		snprintf(server_copy, sizeof(server_copy), "%s",
+			 ctx->ntp_server);
+		pthread_mutex_unlock(&ctx->encoder_mutex);
+
 		for (int attempt = 0; attempt < NTP_RETRY_COUNT; attempt++) {
 			if (os_event_try(ctx->stop_event) == 0)
 				return NULL;
 
-			if (ntp_query(ctx->ntp_server, NTP_QUERY_TIMEOUT_MS, &result)) {
+			if (ntp_query(server_copy, NTP_QUERY_TIMEOUT_MS,
+				      &result)) {
 				success = true;
 				break;
 			}
@@ -161,26 +169,65 @@ static tc_framerate_t detect_obs_framerate(void)
 	if (!obs_get_video_info(&ovi))
 		return TC_FPS_25;
 
-	double fps = (double)ovi.fps_num / (double)ovi.fps_den;
+	/*
+	 * Check exact integer ratios first — OBS stores fps as num/den.
+	 * This avoids ambiguity between 29.97 and 30, or 59.94 and 60.
+	 */
+	uint32_t num = ovi.fps_num;
+	uint32_t den = ovi.fps_den;
 
-	if (fabs(fps - 23.976) < 0.5)
+	if (den == 1) {
+		switch (num) {
+		case 24:
+			return TC_FPS_24;
+		case 25:
+			return TC_FPS_25;
+		case 30:
+			return TC_FPS_30;
+		case 50:
+			return TC_FPS_50;
+		case 60:
+			return TC_FPS_60;
+		}
+	} else if (den == 1001) {
+		if (num == 24000)
+			return TC_FPS_24;
+		if (num == 30000)
+			return TC_FPS_29_97_DF;
+		if (num == 60000)
+			return TC_FPS_60;
+	}
+
+	/* Fallback: approximate matching for non-standard ratios.
+	 * Check exact rates before their NTSC counterparts to avoid
+	 * misdetection (e.g. 30fps must not match 29.97). */
+	double fps = (double)num / (double)den;
+
+	if (fabs(fps - 23.976) < 0.3)
 		return TC_FPS_24;
-	if (fabs(fps - 24.0) < 0.5)
+	if (fabs(fps - 24.0) < 0.3)
 		return TC_FPS_24;
 	if (fabs(fps - 25.0) < 0.5)
 		return TC_FPS_25;
+	if (fabs(fps - 30.0) < 0.01)
+		return TC_FPS_30;
 	if (fabs(fps - 29.97) < 0.5)
 		return TC_FPS_29_97_DF;
-	if (fabs(fps - 30.0) < 0.5)
-		return TC_FPS_30;
-	if (fabs(fps - 50.0) < 1.0)
+	if (fabs(fps - 50.0) < 0.5)
 		return TC_FPS_50;
-	if (fabs(fps - 59.94) < 1.0)
+	if (fabs(fps - 60.0) < 0.01)
 		return TC_FPS_60;
-	if (fabs(fps - 60.0) < 1.0)
+	if (fabs(fps - 59.94) < 0.5)
 		return TC_FPS_60;
 
 	return TC_FPS_25;
+}
+
+static bool fps_setting_valid(int setting)
+{
+	return setting == TC_FPS_24 || setting == TC_FPS_25 ||
+	       setting == TC_FPS_29_97_DF || setting == TC_FPS_30 ||
+	       setting == TC_FPS_50 || setting == TC_FPS_60;
 }
 
 static int fps_nominal(tc_framerate_t fps)
@@ -421,8 +468,10 @@ static void *ltc_source_create(obs_data_t *settings, obs_source_t *source)
 	int fps_setting = (int)obs_data_get_int(settings, S_FRAMERATE);
 	if (fps_setting == 0)
 		ctx->framerate = detect_obs_framerate();
-	else
+	else if (fps_setting_valid(fps_setting))
 		ctx->framerate = (tc_framerate_t)fps_setting;
+	else
+		ctx->framerate = TC_FPS_25; /* safe fallback */
 
 	const char *server = obs_data_get_string(settings, S_NTP_SERVER);
 	if (server && *server)
@@ -474,19 +523,37 @@ static void ltc_source_update(void *data, obs_data_t *settings)
 	tc_framerate_t new_fps;
 	if (fps_setting == 0)
 		new_fps = detect_obs_framerate();
-	else
+	else if (fps_setting_valid(fps_setting))
 		new_fps = (tc_framerate_t)fps_setting;
+	else
+		new_fps = ctx->framerate; /* keep current on invalid value */
 
 	if (new_fps != ctx->framerate)
 		recreate_encoder(ctx, new_fps);
 
 	const char *server = obs_data_get_string(settings, S_NTP_SERVER);
-	if (server && *server)
-		snprintf(ctx->ntp_server, sizeof(ctx->ntp_server), "%s", server);
+	bool server_changed = false;
+	if (server && *server) {
+		pthread_mutex_lock(&ctx->encoder_mutex);
+		if (strncmp(ctx->ntp_server, server,
+			    sizeof(ctx->ntp_server)) != 0) {
+			snprintf(ctx->ntp_server, sizeof(ctx->ntp_server),
+				 "%s", server);
+			server_changed = true;
+		}
+		pthread_mutex_unlock(&ctx->encoder_mutex);
+	}
 
 	int interval = (int)obs_data_get_int(settings, S_SYNC_INTERVAL);
 	if (interval > 0)
 		ctx->sync_interval_sec = interval;
+
+	/* Restart NTP thread to pick up new server immediately */
+	if (server_changed) {
+		stop_ntp_thread(ctx);
+		ctx->first_sync_done = false;
+		start_ntp_thread(ctx);
+	}
 }
 
 /* ---- Properties UI ---- */

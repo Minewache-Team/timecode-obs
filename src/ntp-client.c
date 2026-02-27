@@ -109,11 +109,18 @@ bool ntp_query(const char *server, int timeout_ms, ntp_result_t *result)
 		return false;
 	}
 
-	/* Set timeout */
+	/* Set receive timeout */
+#ifdef _WIN32
+	/* Windows: SO_RCVTIMEO expects a DWORD (milliseconds) */
+	DWORD rcv_timeout = (DWORD)timeout_ms;
+	setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&rcv_timeout,
+		   sizeof(rcv_timeout));
+#else
 	struct timeval tv;
 	tv.tv_sec = timeout_ms / 1000;
 	tv.tv_usec = (timeout_ms % 1000) * 1000;
 	setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
+#endif
 
 	/* Build NTP request: version 4, mode 3 (client) */
 	ntp_packet_t packet;
@@ -138,6 +145,16 @@ bool ntp_query(const char *server, int timeout_ms, ntp_result_t *result)
 	CLOSE_SOCKET(sock);
 
 	if (n < (int)sizeof(packet))
+		return false;
+
+	/* Validate response: reject KoD packets and unsynchronized servers */
+	uint8_t mode = packet.li_vn_mode & 0x07;
+	uint8_t stratum = packet.stratum;
+	if (mode != 4 && mode != 5) /* expect server or broadcast mode */
+		return false;
+	if (stratum == 0 || stratum > 15) /* stratum 0 = KoD, >15 = invalid */
+		return false;
+	if (packet.tx_ts_sec == 0) /* server never set transmit time */
 		return false;
 
 	/* Record T4 (client receive time) */
