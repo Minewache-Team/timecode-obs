@@ -16,6 +16,7 @@
 #include "ltc-encoder-wrapper.h"
 
 #include <obs-module.h>
+#include <plugin-support.h>
 #include <util/platform.h>
 #include <util/threading.h>
 
@@ -29,7 +30,8 @@
 #define NTP_QUERY_TIMEOUT_MS 2000
 #define NTP_RETRY_COUNT 3
 #define EMA_ALPHA 0.3
-#define RESYNC_CHECK_FRAMES 150 /* re-check wall clock every ~5s at 30fps */
+#define RESYNC_CHECK_FRAMES 750 /* check wall clock drift every ~30s at 25fps */
+#define RESYNC_DRIFT_THRESHOLD 2 /* only hard-resync if drift exceeds this many frames */
 
 /* Settings keys */
 #define S_FRAMERATE "framerate"
@@ -71,6 +73,11 @@ struct ltc_source_context {
 
 	/* Timecode re-sync tracking */
 	uint64_t frames_encoded;
+
+	/* Drift detection: reference point for expected timecode */
+	int64_t sync_ref_sec;   /* wall-clock seconds at last hard sync */
+	int64_t sync_ref_usec;  /* wall-clock microseconds at last hard sync */
+	uint64_t sync_ref_frame; /* frames_encoded at last hard sync */
 };
 
 /* ---- NTP sync thread ---- */
@@ -222,15 +229,25 @@ static void recreate_encoder(struct ltc_source_context *ctx, tc_framerate_t new_
 
 /* ---- Audio generation ---- */
 
+/*
+ * Calculate the total frame number for a timecode at the given fps.
+ * Used for drift comparison (not for display).
+ */
+static int64_t tc_to_total_frames(const smpte_timecode_t *tc, int nominal_fps)
+{
+	return (int64_t)tc->hours * 3600 * nominal_fps +
+	       (int64_t)tc->minutes * 60 * nominal_fps +
+	       (int64_t)tc->seconds * nominal_fps +
+	       (int64_t)tc->frames;
+}
+
 static void encode_next_frame(struct ltc_source_context *ctx)
 {
 	if (!ctx->encoder)
 		return;
 
-	bool need_sync = !ctx->frame_valid ||
-			 (ctx->frames_encoded % RESYNC_CHECK_FRAMES == 0);
-
-	if (need_sync) {
+	/* First frame or encoder was reset: must hard-sync */
+	if (!ctx->frame_valid) {
 		int64_t sec, usec;
 		ntp_corrected_time(ctx->ntp_offset_ms, &sec, &usec);
 
@@ -238,12 +255,72 @@ static void encode_next_frame(struct ltc_source_context *ctx)
 		timecode_from_unix(sec, usec, ctx->framerate, &tc);
 		ltc_wrapper_set_timecode(ctx->encoder, tc.hours, tc.minutes,
 					tc.seconds, tc.frames);
+
+		/* Store sync reference point */
+		ctx->sync_ref_sec = sec;
+		ctx->sync_ref_usec = usec;
+		ctx->sync_ref_frame = ctx->frames_encoded;
+		goto encode;
+	}
+
+	/* Periodic drift check: compare free-running TC with wall clock */
+	if (ctx->frames_encoded % RESYNC_CHECK_FRAMES == 0) {
+		int64_t sec, usec;
+		ntp_corrected_time(ctx->ntp_offset_ms, &sec, &usec);
+
+		smpte_timecode_t wall_tc;
+		timecode_from_unix(sec, usec, ctx->framerate, &wall_tc);
+		int64_t wall_frames = tc_to_total_frames(&wall_tc,
+							 ctx->nominal_fps);
+
+		/* Calculate where our free-running encoder should be */
+		smpte_timecode_t ref_tc;
+		timecode_from_unix(ctx->sync_ref_sec, ctx->sync_ref_usec,
+				   ctx->framerate, &ref_tc);
+		int64_t ref_frames = tc_to_total_frames(&ref_tc,
+							ctx->nominal_fps);
+		int64_t elapsed = (int64_t)(ctx->frames_encoded -
+					    ctx->sync_ref_frame);
+		int64_t expected_frames = ref_frames + elapsed;
+
+		/* Handle midnight rollover (24h in frames) */
+		int64_t day_frames = (int64_t)24 * 3600 * ctx->nominal_fps;
+		int64_t drift = wall_frames - (expected_frames % day_frames);
+
+		/* Normalize drift to [-day_frames/2, day_frames/2] */
+		if (drift > day_frames / 2)
+			drift -= day_frames;
+		else if (drift < -day_frames / 2)
+			drift += day_frames;
+
+		if (drift < -RESYNC_DRIFT_THRESHOLD ||
+		    drift > RESYNC_DRIFT_THRESHOLD) {
+			/* Drift exceeds threshold: hard resync */
+			obs_log(LOG_WARNING,
+				"LTC timecode drift detected (%lld frames), resyncing",
+				(long long)drift);
+			ltc_wrapper_set_timecode(ctx->encoder,
+						wall_tc.hours,
+						wall_tc.minutes,
+						wall_tc.seconds,
+						wall_tc.frames);
+
+			ctx->sync_ref_sec = sec;
+			ctx->sync_ref_usec = usec;
+			ctx->sync_ref_frame = ctx->frames_encoded;
+		} else {
+			/* Drift within tolerance: continue free-running */
+			ltc_wrapper_inc_timecode(ctx->encoder);
+		}
 	} else {
+		/* Normal operation: increment timecode */
 		ltc_wrapper_inc_timecode(ctx->encoder);
 	}
 
+encode:
 	ctx->frame_samples_total =
-		ltc_wrapper_encode_frame(ctx->encoder, ctx->frame_buf, MAX_FRAME_SAMPLES);
+		ltc_wrapper_encode_frame(ctx->encoder, ctx->frame_buf,
+					MAX_FRAME_SAMPLES);
 
 	if (ctx->frame_samples_total > 0) {
 		ctx->frame_valid = true;
