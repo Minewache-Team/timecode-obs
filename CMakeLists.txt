@@ -4,7 +4,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/common/bootstrap.cmake" NO_POLICY_SCO
 
 project(${_name} VERSION ${_version})
 
-option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" OFF)
+option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" ON)
 option(ENABLE_QT "Use Qt functionality" OFF)
 option(BUILD_TESTS "Build unit tests" OFF)
 
@@ -55,6 +55,8 @@ target_sources(
           src/timecode.h
           src/ltc-encoder-wrapper.c
           src/ltc-encoder-wrapper.h
+          src/auto-setup.c
+          src/auto-setup.h
 )
 
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")

@@ -40,7 +40,7 @@ function Find-BuildDir {
     )
 
     foreach ($dir in $candidates) {
-        $dllPath = Join-Path $PSScriptRoot $dir $DllName
+        $dllPath = Join-Path (Join-Path $PSScriptRoot $dir) $DllName
         if (Test-Path $dllPath) {
             return (Join-Path $PSScriptRoot $dir)
         }
@@ -167,14 +167,68 @@ try {
 }
 Write-Host "[OK] Plugin directory created: $PluginDir" -ForegroundColor Green
 
-# Step 5: Copy files
-Copy-Item $DllPath "$binDir\" -Force
-Write-Host "[OK] Copied: $DllName -> $binDir\" -ForegroundColor Green
+# Step 5: Check if OBS is running (DLL would be locked)
+$obsProcess = Get-Process -Name "obs64" -ErrorAction SilentlyContinue
+if ($obsProcess) {
+    Write-Host "[WARN] OBS Studio is currently running!" -ForegroundColor Yellow
+    Write-Host "       The plugin DLL may be locked. Please close OBS first." -ForegroundColor Yellow
+    $response = Read-Host "       Close OBS now and continue? (y/n)"
+    if ($response -eq 'y') {
+        Stop-Process -Name "obs64" -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+        Write-Host "[OK] OBS Studio closed." -ForegroundColor Green
+    } else {
+        Write-Host "[ERROR] Cannot install while OBS is running. Please close OBS and retry." -ForegroundColor Red
+        exit 1
+    }
+}
+
+# Step 6: Copy files
+try {
+    Copy-Item $DllPath "$binDir\" -Force
+    Write-Host "[OK] Copied: $DllName -> $binDir\" -ForegroundColor Green
+} catch [System.IO.IOException] {
+    Write-Host "[ERROR] Cannot copy DLL - file is locked." -ForegroundColor Red
+    Write-Host "        Close OBS Studio completely and try again." -ForegroundColor Red
+    exit 1
+}
 
 Copy-Item -Recurse -Force "$DataDir\*" "$dataDestDir\"
 Write-Host "[OK] Copied: data\ -> $dataDestDir\" -ForegroundColor Green
 
-# Step 6: Verify installation
+# Step 7: Deploy MW OBS KIT template (scene collection + profile)
+$ObsAppData = "$env:APPDATA\obs-studio"
+$TemplateDir = Join-Path $PSScriptRoot "[MW] OBS KIT"
+$SceneCollectionFile = Join-Path $TemplateDir "Minewache.json"
+
+if (Test-Path $SceneCollectionFile) {
+    $scenesDir = "$ObsAppData\basic\scenes"
+    $profileDir = "$ObsAppData\basic\profiles\Minewache"
+    $targetScene = "$scenesDir\Minewache.json"
+
+    if (Test-Path $targetScene) {
+        Write-Host "[INFO] Minewache scene collection already exists, skipping template deploy" -ForegroundColor Yellow
+    } else {
+        # Create directories if needed
+        New-Item -ItemType Directory -Force -Path $scenesDir | Out-Null
+        New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
+
+        # Copy scene collection
+        Copy-Item $SceneCollectionFile $targetScene -Force
+        Write-Host "[OK] Deployed scene collection: Minewache.json -> $scenesDir\" -ForegroundColor Green
+
+        # Copy profile
+        $profileSrc = Join-Path $TemplateDir "Minewache"
+        if (Test-Path $profileSrc) {
+            Copy-Item -Recurse -Force "$profileSrc\*" "$profileDir\"
+            Write-Host "[OK] Deployed profile: Minewache -> $profileDir\" -ForegroundColor Green
+        }
+    }
+} else {
+    Write-Host "[INFO] MW OBS KIT template not found, skipping template deploy" -ForegroundColor Yellow
+}
+
+# Step 8: Verify installation
 Write-Host ""
 Write-Host "--- Verification ---" -ForegroundColor Cyan
 
@@ -202,8 +256,11 @@ if ($allOk) {
     Write-Host ""
     Write-Host "Next steps:" -ForegroundColor Cyan
     Write-Host "  1. Restart OBS Studio (close completely and reopen)" -ForegroundColor White
-    Write-Host "  2. Go to Sources -> + -> 'LTC Timecode Generator'" -ForegroundColor White
-    Write-Host "  3. Check Help -> Log Files if the source doesn't appear" -ForegroundColor White
+    Write-Host "  2. Scene Collection -> 'Minewache'" -ForegroundColor White
+    Write-Host "  3. Profile -> 'Minewache'" -ForegroundColor White
+    Write-Host "  4. LTC Timecode is pre-configured on Track 3" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  (If no template was deployed, manually add: Sources -> + -> 'LTC Timecode Generator')" -ForegroundColor Gray
 } else {
     Write-Host "Installation completed with errors. Check the messages above." -ForegroundColor Red
     exit 1

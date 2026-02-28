@@ -280,25 +280,27 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 - **User Feedback:** _"musste in %APPDATA%\obs-studio den plugins Ordner erstellen, weiß nicht ob das normal ist, es gab da nur plugin_config als Ordner"_
 - **Files:** `install.ps1` (new), `install.sh` (new), `src/plugin-main.c` (modified), `README.md` (modified), `Setup.md` (modified)
 
-#### TICKET-012: Auto-Setup on First Load (Auto-Add Source + Audio Track 3)
-- **Status:** `TODO`
-- **Depends on:** TICKET-011
+#### TICKET-012: Auto-Setup on First Load (Switch to Minewache Template)
+- **Status:** `DONE`
+- **Depends on:** TICKET-011, TICKET-014
 - **Type:** Feature
-- **Description:** When the plugin loads for the first time, automatically add the "LTC Timecode Generator" source to the current scene and configure OBS to route the LTC audio to a dedicated recording track (Track 3). This requires enabling `ENABLE_FRONTEND_API` in CMakeLists.txt and using `obs_frontend_add_event_callback()` to detect when OBS is fully initialized. A first-run flag prevents repeated auto-setup.
+- **Description:** When the plugin loads for the first time, detect if the Minewache scene collection is installed and offer to switch to it via a native dialog. The Minewache template has LTC Timecode pre-configured on Track 3. A config flag prevents repeated prompting.
 - **Acceptance Criteria:**
-  - [ ] `ENABLE_FRONTEND_API` enabled in CMakeLists.txt
-  - [ ] On first plugin load: LTC source is automatically added to the current scene
-  - [ ] LTC source is routed to audio track 3 in recording output settings
-  - [ ] First-run flag stored in OBS config (prevents re-adding on every start)
-  - [ ] If source already exists (user added manually), skip auto-add
-  - [ ] Logging: clear messages about what was auto-configured
-  - [ ] Works on both Windows and Linux
-- **User Feedback:** _"wir sollten unbedingt machen dass der das template auch automatisch hinzufügt weil im template dann auch spur 3 mit den LTC sounds automatisch gemacht wird damit möglichst wenig verkackt werden kann"_
+  - [x] `ENABLE_FRONTEND_API` enabled in CMakeLists.txt (default ON)
+  - [x] On first plugin load: dialog asks to switch to Minewache scene collection
+  - [x] If user accepts: switches scene collection + profile to "Minewache"
+  - [x] First-run flag stored in OBS user config (`obs-ltc-timecode/auto_setup_done`)
+  - [x] If Minewache scene collection not installed: silently skips
+  - [x] If already active: marks done without dialog
+  - [x] Logging: clear messages about what was auto-configured
+  - [x] Works on Windows (MessageBoxA dialog) and Linux (auto-switch without dialog)
+- **User Feedback:** _"Plugin soll beim Starten direkt die Option geben zum Minewache template zu switchen"_
 - **Technical Notes:**
-  - Requires `obs-frontend-api`: `obs_frontend_get_current_scene()`, `obs_scene_add()`
-  - Audio track assignment: `obs_encoder_set_audio()` or output settings manipulation
-  - First-run check: `obs_data_get_bool(config, "auto_setup_done")`
-  - Must wait for `OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGED` or `OBS_FRONTEND_EVENT_FINISHED_LOADING` before accessing scenes
+  - Uses `obs_frontend_add_event_callback()` with `OBS_FRONTEND_EVENT_FINISHED_LOADING`
+  - Scene collection switch: `obs_frontend_set_current_scene_collection()`
+  - Profile switch: `obs_frontend_set_current_profile()`
+  - Config: `obs_frontend_get_user_config()` (NOT deprecated `get_global_config`)
+  - Windows dialog: Win32 `MessageBoxA()` (no Qt dependency needed)
 - **Files:** `CMakeLists.txt` (modified), `src/plugin-main.c` (modified), `src/auto-setup.c` (new), `src/auto-setup.h` (new)
 
 #### TICKET-013: Plugin Load Diagnostics & OBS Version Verification
@@ -320,6 +322,54 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 ---
 
+### Epic 8: MW OBS KIT Template Integration
+
+> User request: Integrate the LTC timecode plugin into the Minewache team's OBS template
+> so that plugin installation automatically deploys a ready-to-use scene collection with
+> a dedicated LTC audio track (Track 3).
+
+#### TICKET-014: Add LTC Timecode Source to MW OBS KIT Template
+- **Status:** `DONE`
+- **Depends on:** TICKET-006
+- **Type:** Enhancement
+- **Description:** Update the `[MW] OBS KIT` scene collection template to include an "LTC Timecode" audio source routed exclusively to Track 3. Update the profile's `basic.ini` to name Track 3 "LTC Timecode" and include it in `RecTracks`. The LTC source must have `mixers=4` (bit 2 = Track 3 only) so it doesn't bleed into voice or game audio tracks.
+- **Acceptance Criteria:**
+  - [x] `Minewache.json` contains an `ltc_timecode_source` entry with `mixers=4`
+  - [x] `basic.ini` sets `Track3Name=LTC Timecode`
+  - [x] `RecTracks` updated from `3` (Tracks 1+2) to `7` (Tracks 1+2+3) in both SimpleOutput and AdvOut
+  - [x] LTC source default settings: framerate=auto, ntp_server=pool.ntp.org, sync_interval=5
+  - [x] Scene item added to "Minewache Scene" items list (id: 5)
+- **Files:** `[MW] OBS KIT/Minewache.json` (modified), `[MW] OBS KIT/Minewache/basic.ini` (modified)
+
+#### TICKET-015: Deploy MW OBS KIT Template via install.ps1
+- **Status:** `DONE`
+- **Depends on:** TICKET-014
+- **Type:** Enhancement
+- **Description:** Extend `install.ps1` to copy the MW OBS KIT template files to the OBS configuration directory (`%APPDATA%\obs-studio\basic\`). The scene collection JSON goes to `basic\scenes\`, the profile folder goes to `basic\profiles\`. Only deploy if the scene collection doesn't already exist (avoid overwriting user customizations). Print instructions for the user to select the "Minewache" scene collection/profile in OBS.
+- **Acceptance Criteria:**
+  - [x] Scene collection copied to `%APPDATA%\obs-studio\basic\scenes\Minewache.json`
+  - [x] Profile folder copied to `%APPDATA%\obs-studio\basic\profiles\Minewache\`
+  - [x] Skip copy if `Minewache.json` already exists (print info message)
+  - [x] Post-install message tells user to select "Minewache" scene collection in OBS
+  - [x] Uninstall does NOT remove scene collection (user may have customized it)
+- **Files:** `install.ps1` (modified)
+
+#### TICKET-016: Deploy MW OBS KIT Template via Inno Setup Installer
+- **Status:** `DONE`
+- **Depends on:** TICKET-014
+- **Type:** Enhancement
+- **Description:** Extend the Inno Setup installer (`obs-ltc-timecode.iss`) to include the MW OBS KIT template files and deploy them to the OBS configuration directory during installation. Use `{userappdata}\obs-studio\basic\` as the target. Template files should use `onlyifdoesntexist` flag to avoid overwriting user customizations. Update post-install message to mention the Minewache template.
+- **Acceptance Criteria:**
+  - [x] Template files included as [Files] entries in the ISS script
+  - [x] Scene collection deployed to `{userappdata}\obs-studio\basic\scenes\Minewache.json`
+  - [x] Profile deployed to `{userappdata}\obs-studio\basic\profiles\Minewache\`
+  - [x] `onlyifdoesntexist` flag prevents overwriting existing files
+  - [x] Post-install message updated to mention "Minewache" scene collection
+  - [x] Template source files included in installer packaging (CI-compatible paths)
+- **Files:** `installer/obs-ltc-timecode.iss` (modified)
+
+---
+
 ## Decision Log
 
 | Date | Ticket | Decision | Rationale | Alternatives Considered |
@@ -335,6 +385,10 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 | 2026-02-27 | TICKET-008 | Drift-aware resync instead of blind hard-resync | Hard resync every 150 frames caused timecode jumps breaking DaVinci Resolve. Now checks every 750 frames (~30s) and only resyncs if drift > 2 frames. | Blind hard-resync (causes TC jumps), pure free-running (accumulates drift) |
 | 2026-02-27 | TICKET-008 | Added #include <plugin-support.h> to ltc-source.c | obs_log() declared in plugin-support.h, was missing from ltc-source.c causing Windows build failure | N/A (was a build error) |
 | 2026-02-27 | TICKET-013 | Windows install path: `%ProgramData%\obs-studio\plugins\` NOT `%APPDATA%` | OBS does NOT scan `%APPDATA%\obs-studio\plugins\` for plugin DLLs. AppData is only for settings/config. ProgramData is the official OBS third-party plugin location. This was the root cause of "plugin doesn't appear in OBS". | `%APPDATA%` (wrong — never worked), `C:\Program Files\obs-studio\obs-plugins\64bit\` (legacy, deprecated by OBS) |
+| 2026-03-01 | TICKET-014 | LTC Timecode on Track 3 with `mixers=4` (exclusive) | Track 3 is dedicated to LTC so it never bleeds into voice (Track 1) or game audio (Track 2). `mixers=4` = bit 2 = Track 3 only. RecTracks bitmask 7 = Tracks 1+2+3. | Track 4+ (wastes tracks), shared track (would mix LTC into audible audio) |
+| 2026-03-01 | TICKET-015/016 | Template deploy only if not already present (`onlyifdoesntexist` / `-not Test-Path`) | Prevents overwriting user customizations to the Minewache scene collection. Uninstall also does NOT remove template. | Always overwrite (destroys user changes), ask user (adds friction) |
+| 2026-03-01 | TICKET-012 | Win32 MessageBoxA for first-run dialog (no Qt dependency) | Plugin has `ENABLE_QT=OFF`, so Qt dialogs unavailable. Win32 MessageBoxA is always available on Windows. On Linux: auto-switch without dialog (no universal GTK/zenity guarantee). | Qt dialog (requires ENABLE_QT), zenity subprocess (fragile, not always installed) |
+| 2026-03-01 | TICKET-012 | `obs_frontend_get_user_config()` instead of deprecated `get_global_config()` | `obs_frontend_get_global_config()` is marked `OBS_DEPRECATED` in OBS 31.x+ header. `get_user_config()` is the replacement. | `get_global_config()` (deprecated), custom config file (unnecessary complexity) |
 
 ---
 
@@ -342,6 +396,7 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 | Session | Date | Agent | Tickets Worked | Status at End | Notes |
 |---------|------|-------|----------------|---------------|-------|
+| 5 | 2026-03-01 | Claude Opus 4.6 | TICKET-014 (done), TICKET-015 (done), TICKET-016 (done), TICKET-012 (done) | All 4 tickets DONE | Epic 8: MW OBS KIT Template Integration. Added LTC Timecode source to Minewache scene collection (mixers=4, Track 3 only). Updated basic.ini (RecTracks=7, Track3Name). Extended install.ps1 and Inno Setup installer to auto-deploy template. TICKET-012: Auto-setup dialog on first OBS start offers to switch to Minewache template. Uses obs-frontend-api (ENABLE_FRONTEND_API=ON), Win32 MessageBoxA on Windows, auto-switch on Linux. Config flag prevents re-prompting. |
 | 4 | 2026-02-27 | Claude Opus 4.6 | TICKET-011 (done), TICKET-013 (done), TICKET-012 (created) | TICKET-011+013 DONE | User feedback: plugin doesn't appear in OBS. **Root cause: wrong install path** — all docs said `%APPDATA%` but OBS loads from `%ProgramData%`. Fixed install.ps1, install.sh, README, Setup.md. Added plugin diagnostics (obs_module_description, verbose logging). Created TICKET-012 for auto-setup (pending). |
 | 3 | 2026-02-27 | Claude Opus 4.6 | TICKET-009 | README & docs done | Wrote comprehensive user-facing README.md: install instructions (Win/Linux), usage guide, multi-camera sync workflow, configuration reference, troubleshooting/FAQ, build-from-source guide, technical details. TICKET-008 skipped (requires physical 2-PC hardware test). TICKET-010 left for user (release tagging). |
 | 2 | 2026-02-27 | Claude Opus 4.6 | TICKET-008 (partial) | DaVinci Resolve compat fixes done | Fixed obs_log build error (missing plugin-support.h include). Replaced blind hard-resync with drift-aware resync (750 frame interval, 2 frame threshold). Added ContinuousTimecodeSequence25fps test. All 27 tests pass. |

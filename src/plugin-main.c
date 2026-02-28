@@ -21,6 +21,9 @@
 
 #include "ltc-source.h"
 #include "ntp-client.h"
+#ifdef ENABLE_FRONTEND_API
+#include "auto-setup.h"
+#endif
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
@@ -40,6 +43,10 @@ bool obs_module_load(void)
 
 	ltc_source_register();
 
+#ifdef ENABLE_FRONTEND_API
+	auto_setup_init();
+#endif
+
 	obs_log(LOG_INFO, "plugin loaded successfully (version %s) — "
 			  "source 'LTC Timecode Generator' registered",
 		PLUGIN_VERSION);
@@ -48,6 +55,9 @@ bool obs_module_load(void)
 
 void obs_module_unload(void)
 {
+#ifdef ENABLE_FRONTEND_API
+	auto_setup_cleanup();
+#endif
 	ntp_platform_cleanup();
 	obs_log(LOG_INFO, "plugin unloaded");
 }

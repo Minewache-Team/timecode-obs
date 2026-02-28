@@ -2,20 +2,36 @@
 ; OBS Studio LTC Timecode Generator Plugin
 ;
 ; Usage (from project root):
-;   iscc /DMyAppVersion=0.1.0 /DConfiguration=RelWithDebInfo installer\obs-ltc-timecode.iss
+;   Build for distribution (CI - uses release/ staging dir):
+;     iscc /DMyAppVersion=0.1.0 /DConfiguration=Release installer\obs-ltc-timecode.iss
+;
+;   Build from local build output (developer):
+;     iscc /DMyAppVersion=0.1.0 /DUseLocalBuild=1 installer\obs-ltc-timecode.iss
 
 #ifndef MyAppVersion
   #define MyAppVersion "0.1.0"
 #endif
 
 #ifndef Configuration
-  #define Configuration "RelWithDebInfo"
+  #define Configuration "Release"
 #endif
 
 #define MyAppName "OBS LTC Timecode Generator"
 #define MyAppPublisher "Ferdmusic"
 #define MyAppURL "https://github.com/Minewache-Team/timecode-obs"
 #define PluginName "obs-ltc-timecode"
+
+; Source paths: CI uses release/ staging, local builds use build_x64/ directly
+#ifdef UseLocalBuild
+  #define DllSource "..\build_x64\" + Configuration + "\" + PluginName + ".dll"
+  #define DataSource "..\data\*"
+#else
+  #define DllSource "..\release\" + Configuration + "\" + PluginName + "\bin\64bit\" + PluginName + ".dll"
+  #define DataSource "..\release\" + Configuration + "\" + PluginName + "\data\*"
+#endif
+
+; MW OBS KIT template path
+#define TemplateSource "..\[MW] OBS KIT"
 
 [Setup]
 AppId={{A7F3B2E1-9C4D-4E8F-B6A5-1D2E3F4A5B6C}
@@ -26,7 +42,9 @@ AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}/issues
 DefaultDirName={commonappdata}\obs-studio\plugins\{#PluginName}
 DisableProgramGroupPage=yes
+OutputDir=..\build_x64
 OutputBaseFilename={#PluginName}-{#MyAppVersion}-windows-x64-setup
+SetupIconFile=compiler:SetupClassicIcon.ico
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
@@ -35,16 +53,29 @@ PrivilegesRequired=admin
 UninstallDisplayName={#MyAppName}
 DisableDirPage=yes
 UsePreviousAppDir=yes
+CloseApplications=force
+CloseApplicationsFilter=obs64.exe
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
+Name: "german"; MessagesFile: "compiler:Languages\German.isl"
 
 [Files]
 ; Plugin DLL
-Source: "..\release\{#Configuration}\{#PluginName}\bin\64bit\{#PluginName}.dll"; DestDir: "{app}\bin\64bit"; Flags: ignoreversion
+Source: "{#DllSource}"; DestDir: "{app}\bin\64bit"; Flags: ignoreversion
 
 ; Data files (locale etc.)
-Source: "..\release\{#Configuration}\{#PluginName}\data\*"; DestDir: "{app}\data"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#DataSource}"; DestDir: "{app}\data"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+; MW OBS KIT Template - Scene Collection (only if not already customized by user)
+Source: "{#TemplateSource}\Minewache.json"; DestDir: "{userappdata}\obs-studio\basic\scenes"; Flags: onlyifdoesntexist
+
+; MW OBS KIT Template - Profile (only if not already customized by user)
+Source: "{#TemplateSource}\Minewache\*"; DestDir: "{userappdata}\obs-studio\basic\profiles\Minewache"; Flags: onlyifdoesntexist recursesubdirs createallsubdirs
+
+[Dirs]
+Name: "{userappdata}\obs-studio\basic\scenes"
+Name: "{userappdata}\obs-studio\basic\profiles\Minewache"
 
 [Code]
 function InitializeSetup(): Boolean;
@@ -65,10 +96,25 @@ begin
   end;
 end;
 
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    MsgBox('Installation complete!' + #13#10#13#10 +
+           'To use the plugin:' + #13#10 +
+           '  1. Start OBS Studio' + #13#10 +
+           '  2. Scene Collection -> "Minewache"' + #13#10 +
+           '  3. Profile -> "Minewache"' + #13#10 +
+           '  4. LTC Timecode is pre-configured on Track 3' + #13#10#13#10 +
+           'If OBS was running during installation, please restart it.',
+           mbInformation, MB_OK);
+  end;
+end;
+
 [Messages]
 SetupWindowTitle=Setup - {#MyAppName} v{#MyAppVersion}
 WelcomeLabel1=Welcome to the {#MyAppName} Setup
-WelcomeLabel2=This will install the LTC Timecode Generator plugin for OBS Studio.%n%nThe plugin generates SMPTE LTC timecode audio synchronized via NTP.%n%nVersion: {#MyAppVersion}
+WelcomeLabel2=This will install the LTC Timecode Generator plugin for OBS Studio.%n%nThe plugin generates NTP-synchronized SMPTE LTC timecode audio for frame-accurate multi-camera synchronization.%n%nVersion: {#MyAppVersion}
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
