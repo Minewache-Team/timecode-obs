@@ -197,16 +197,17 @@ Copy-Item -Recurse -Force "$DataDir\*" "$dataDestDir\"
 Write-Host "[OK] Copied: data\ -> $dataDestDir\" -ForegroundColor Green
 
 # Step 7: Deploy MW OBS KIT template (scene collection + profile)
+# NOTE: [MW] contains brackets which are PowerShell wildcard chars — use -LiteralPath
 $ObsAppData = "$env:APPDATA\obs-studio"
 $TemplateDir = Join-Path $PSScriptRoot "[MW] OBS KIT"
 $SceneCollectionFile = Join-Path $TemplateDir "Minewache.json"
 
-if (Test-Path $SceneCollectionFile) {
+if (Test-Path -LiteralPath $SceneCollectionFile) {
     $scenesDir = "$ObsAppData\basic\scenes"
     $profileDir = "$ObsAppData\basic\profiles\Minewache"
     $targetScene = "$scenesDir\Minewache.json"
 
-    if (Test-Path $targetScene) {
+    if (Test-Path -LiteralPath $targetScene) {
         Write-Host "[INFO] Minewache scene collection already exists, skipping template deploy" -ForegroundColor Yellow
     } else {
         # Create directories if needed
@@ -214,13 +215,13 @@ if (Test-Path $SceneCollectionFile) {
         New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
 
         # Copy scene collection
-        Copy-Item $SceneCollectionFile $targetScene -Force
+        Copy-Item -LiteralPath $SceneCollectionFile -Destination $targetScene -Force
         Write-Host "[OK] Deployed scene collection: Minewache.json -> $scenesDir\" -ForegroundColor Green
 
         # Copy profile
         $profileSrc = Join-Path $TemplateDir "Minewache"
-        if (Test-Path $profileSrc) {
-            Copy-Item -Recurse -Force "$profileSrc\*" "$profileDir\"
+        if (Test-Path -LiteralPath $profileSrc) {
+            Copy-Item -LiteralPath $profileSrc -Destination $profileDir -Recurse -Force
             Write-Host "[OK] Deployed profile: Minewache -> $profileDir\" -ForegroundColor Green
         }
     }
