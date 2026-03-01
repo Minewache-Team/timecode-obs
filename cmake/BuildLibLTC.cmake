@@ -44,3 +44,35 @@ set_target_properties(libltc PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
   LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
+
+# macOS: set install name so the dylib can be found via @rpath
+if(APPLE)
+  set_target_properties(libltc PROPERTIES
+    INSTALL_NAME_DIR "@rpath"
+    BUILD_WITH_INSTALL_RPATH TRUE
+  )
+endif()
+
+# Install libltc shared library alongside the plugin for each platform.
+# This ensures cmake --install populates the release staging directory correctly.
+if(WIN32)
+  install(TARGETS libltc RUNTIME DESTINATION "${CMAKE_PROJECT_NAME}/bin/64bit")
+elseif(APPLE)
+  install(TARGETS libltc LIBRARY DESTINATION "${CMAKE_PROJECT_NAME}.plugin/Contents/Frameworks")
+else()
+  include(GNUInstallDirs)
+  install(TARGETS libltc LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/obs-plugins)
+endif()
+
+# Install LGPL license for libltc (required by LGPLv3 Section 4a/4b)
+set(LIBLTC_LICENSE "${LIBLTC_DIR}/COPYING")
+if(EXISTS "${LIBLTC_LICENSE}")
+  if(WIN32)
+    install(FILES "${LIBLTC_LICENSE}" DESTINATION "${CMAKE_PROJECT_NAME}/licenses/libltc" RENAME "COPYING.LGPLv3")
+  elseif(APPLE)
+    install(FILES "${LIBLTC_LICENSE}" DESTINATION "${CMAKE_PROJECT_NAME}.plugin/Contents/Resources/licenses/libltc" RENAME "COPYING.LGPLv3")
+  else()
+    include(GNUInstallDirs)
+    install(FILES "${LIBLTC_LICENSE}" DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/doc/${CMAKE_PROJECT_NAME}/licenses/libltc RENAME "COPYING.LGPLv3")
+  endif()
+endif()

@@ -69,6 +69,14 @@ target_sources(
 
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
+# macOS: add rpath so plugin can find libltc.dylib inside the bundle's Frameworks/
+if(APPLE)
+  set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES
+    INSTALL_RPATH "@loader_path/../Frameworks"
+    BUILD_WITH_INSTALL_RPATH TRUE
+  )
+endif()
+
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
 
 # Tests

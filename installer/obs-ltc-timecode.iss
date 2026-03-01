@@ -76,10 +76,11 @@ Source: "..\deps\libltc\COPYING"; DestDir: "{app}\licenses\libltc"; DestName: "C
 Source: "{#DataSource}"; DestDir: "{app}\data"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; MW OBS KIT Template - Scene Collection (only if not already customized by user)
-Source: "{#TemplateSource}\Minewache.json"; DestDir: "{userappdata}\obs-studio\basic\scenes"; Flags: onlyifdoesntexist
+; skipifsourcedoesntexist: template files are optional (not present in CI)
+Source: "{#TemplateSource}\Minewache.json"; DestDir: "{userappdata}\obs-studio\basic\scenes"; Flags: onlyifdoesntexist skipifsourcedoesntexist
 
 ; MW OBS KIT Template - Profile (only if not already customized by user)
-Source: "{#TemplateSource}\Minewache\*"; DestDir: "{userappdata}\obs-studio\basic\profiles\Minewache"; Flags: onlyifdoesntexist recursesubdirs createallsubdirs
+Source: "{#TemplateSource}\Minewache\*"; DestDir: "{userappdata}\obs-studio\basic\profiles\Minewache"; Flags: onlyifdoesntexist recursesubdirs createallsubdirs skipifsourcedoesntexist
 
 [Dirs]
 Name: "{userappdata}\obs-studio\basic\scenes"
