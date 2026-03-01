@@ -28,3 +28,12 @@ add_test(NAME NTPOffsetTests COMMAND test-ntp-offset)
 add_executable(test-ltc-roundtrip test-ltc-roundtrip.cpp "${CMAKE_SOURCE_DIR}/src/ltc-encoder-wrapper.c")
 target_link_libraries(test-ltc-roundtrip PRIVATE GTest::gtest_main libltc)
 add_test(NAME LTCRoundtripTests COMMAND test-ltc-roundtrip)
+
+# --- test-http-time ---
+find_package(CURL REQUIRED)
+add_executable(test-http-time test-http-time.cpp "${CMAKE_SOURCE_DIR}/src/http-time-client.c")
+target_link_libraries(test-http-time PRIVATE GTest::gtest_main CURL::libcurl)
+if(WIN32)
+  target_link_libraries(test-http-time PRIVATE ws2_32)
+endif()
+add_test(NAME HTTPTimeTests COMMAND test-http-time)

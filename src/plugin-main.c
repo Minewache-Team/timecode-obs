@@ -21,6 +21,7 @@
 
 #include "ltc-source.h"
 #include "ntp-client.h"
+#include "http-time-client.h"
 #ifdef ENABLE_FRONTEND_API
 #include "auto-setup.h"
 #endif
@@ -41,6 +42,10 @@ bool obs_module_load(void)
 		obs_log(LOG_WARNING, "NTP platform init failed (network features may not work)");
 	}
 
+	if (!http_time_init()) {
+		obs_log(LOG_WARNING, "HTTP time fallback init failed");
+	}
+
 	ltc_source_register();
 
 #ifdef ENABLE_FRONTEND_API
@@ -58,6 +63,7 @@ void obs_module_unload(void)
 #ifdef ENABLE_FRONTEND_API
 	auto_setup_cleanup();
 #endif
+	http_time_cleanup();
 	ntp_platform_cleanup();
 	obs_log(LOG_INFO, "plugin unloaded");
 }

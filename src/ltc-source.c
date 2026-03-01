@@ -12,8 +12,14 @@
 
 #include "ltc-source.h"
 #include "ntp-client.h"
+#include "http-time-client.h"
 #include "timecode.h"
 #include "ltc-encoder-wrapper.h"
+#ifdef ENABLE_FRONTEND_API
+#include "metadata-writer.h"
+#include <obs-frontend-api.h>
+#include <util/config-file.h>
+#endif
 
 #include <obs-module.h>
 #include <plugin-support.h>
@@ -32,11 +38,23 @@
 #define EMA_ALPHA 0.3
 #define RESYNC_CHECK_FRAMES 750 /* check wall clock drift every ~30s at 25fps */
 #define RESYNC_DRIFT_THRESHOLD 2 /* only hard-resync if drift exceeds this many frames */
+#define HTTP_FALLBACK_URL "https://www.google.com"
+#define HTTP_FALLBACK_TIMEOUT_MS 5000
+
+/* Sync method tracking */
+typedef enum {
+	SYNC_METHOD_NONE,
+	SYNC_METHOD_NTP,
+	SYNC_METHOD_HTTP,
+	SYNC_METHOD_LOCAL,
+} sync_method_t;
 
 /* Settings keys */
 #define S_FRAMERATE "framerate"
 #define S_NTP_SERVER "ntp_server"
 #define S_SYNC_INTERVAL "sync_interval"
+#define S_AUDIO_TRACK "audio_track"
+#define S_CAMERA_ID "camera_id"
 
 struct ltc_source_context {
 	obs_source_t *source;
@@ -69,6 +87,7 @@ struct ltc_source_context {
 	volatile int64_t ntp_offset_ms;
 	volatile bool ntp_synced;
 	volatile int64_t ntp_roundtrip_ms;
+	volatile sync_method_t sync_method;
 	bool first_sync_done;
 
 	/* Timecode re-sync tracking */
@@ -78,6 +97,17 @@ struct ltc_source_context {
 	int64_t sync_ref_sec;   /* wall-clock seconds at last hard sync */
 	int64_t sync_ref_usec;  /* wall-clock microseconds at last hard sync */
 	uint64_t sync_ref_frame; /* frames_encoded at last hard sync */
+
+	/* Audio track routing */
+	int audio_track; /* 1-6, default 3 */
+
+	/* Camera identification for LTC User Bits */
+	int camera_id; /* 0-7 maps to A-H */
+
+#ifdef ENABLE_FRONTEND_API
+	/* Metadata sidecar writer */
+	metadata_writer_t *metadata;
+#endif
 };
 
 /* ---- NTP sync thread ---- */
@@ -123,6 +153,32 @@ static void *ntp_sync_thread(void *data)
 			}
 			ctx->ntp_roundtrip_ms = result.roundtrip_ms;
 			ctx->ntp_synced = true;
+			ctx->sync_method = SYNC_METHOD_NTP;
+		} else {
+			/* NTP failed — try HTTP Date header fallback */
+			http_time_result_t http_result;
+			if (http_time_query(HTTP_FALLBACK_URL,
+					    HTTP_FALLBACK_TIMEOUT_MS,
+					    &http_result)) {
+				if (!ctx->first_sync_done) {
+					ctx->ntp_offset_ms =
+						http_result.offset_ms;
+					ctx->first_sync_done = true;
+				} else {
+					int64_t old = ctx->ntp_offset_ms;
+					int64_t smoothed = (int64_t)(
+						EMA_ALPHA *
+							(double)http_result
+								.offset_ms +
+						(1.0 - EMA_ALPHA) *
+							(double)old);
+					ctx->ntp_offset_ms = smoothed;
+				}
+				ctx->ntp_synced = true;
+				ctx->sync_method = SYNC_METHOD_HTTP;
+			} else {
+				ctx->sync_method = SYNC_METHOD_LOCAL;
+			}
 		}
 
 		if (os_event_timedwait(ctx->stop_event,
@@ -301,7 +357,16 @@ static void encode_next_frame(struct ltc_source_context *ctx)
 		smpte_timecode_t tc;
 		timecode_from_unix(sec, usec, ctx->framerate, &tc);
 		ltc_wrapper_set_timecode(ctx->encoder, tc.hours, tc.minutes,
-					tc.seconds, tc.frames);
+					tc.seconds, tc.frames, tc.year,
+					tc.month, tc.day, ctx->camera_id);
+
+#ifdef ENABLE_FRONTEND_API
+		{
+			char tc_str[16];
+			timecode_to_string(&tc, tc_str, sizeof(tc_str));
+			metadata_writer_set_timecode(ctx->metadata, tc_str);
+		}
+#endif
 
 		/* Store sync reference point */
 		ctx->sync_ref_sec = sec;
@@ -350,7 +415,11 @@ static void encode_next_frame(struct ltc_source_context *ctx)
 						wall_tc.hours,
 						wall_tc.minutes,
 						wall_tc.seconds,
-						wall_tc.frames);
+						wall_tc.frames,
+						wall_tc.year,
+						wall_tc.month,
+						wall_tc.day,
+						ctx->camera_id);
 
 			ctx->sync_ref_sec = sec;
 			ctx->sync_ref_usec = usec;
@@ -483,11 +552,29 @@ static void *ltc_source_create(obs_data_t *settings, obs_source_t *source)
 	if (ctx->sync_interval_sec <= 0)
 		ctx->sync_interval_sec = 300;
 
+	/* Camera ID for LTC User Bits */
+	ctx->camera_id = (int)obs_data_get_int(settings, S_CAMERA_ID);
+	if (ctx->camera_id < 0 || ctx->camera_id > 7)
+		ctx->camera_id = 0;
+
+	/* Audio track routing */
+	ctx->audio_track = (int)obs_data_get_int(settings, S_AUDIO_TRACK);
+	if (ctx->audio_track < 1 || ctx->audio_track > 6)
+		ctx->audio_track = 3;
+	obs_source_set_audio_mixers(source,
+				    (uint32_t)(1 << (ctx->audio_track - 1)));
+
 	create_encoder(ctx);
 	start_ntp_thread(ctx);
 
-	obs_log(LOG_INFO, "LTC source created (fps=%d, server=%s, interval=%ds)",
-		ctx->nominal_fps, ctx->ntp_server, ctx->sync_interval_sec);
+#ifdef ENABLE_FRONTEND_API
+	ctx->metadata = metadata_writer_create();
+#endif
+
+	obs_log(LOG_INFO,
+		"LTC source created (fps=%d, server=%s, interval=%ds, track=%d)",
+		ctx->nominal_fps, ctx->ntp_server, ctx->sync_interval_sec,
+		ctx->audio_track);
 
 	return ctx;
 }
@@ -499,6 +586,10 @@ static void ltc_source_destroy(void *data)
 		return;
 
 	stop_ntp_thread(ctx);
+
+#ifdef ENABLE_FRONTEND_API
+	metadata_writer_destroy(ctx->metadata);
+#endif
 
 	pthread_mutex_lock(&ctx->encoder_mutex);
 	if (ctx->encoder) {
@@ -548,12 +639,56 @@ static void ltc_source_update(void *data, obs_data_t *settings)
 	if (interval > 0)
 		ctx->sync_interval_sec = interval;
 
+	/* Camera ID */
+	int new_cam = (int)obs_data_get_int(settings, S_CAMERA_ID);
+	if (new_cam >= 0 && new_cam <= 7)
+		ctx->camera_id = new_cam;
+
+	/* Audio track routing */
+	int new_track = (int)obs_data_get_int(settings, S_AUDIO_TRACK);
+	if (new_track >= 1 && new_track <= 6 &&
+	    new_track != ctx->audio_track) {
+		ctx->audio_track = new_track;
+		obs_source_set_audio_mixers(
+			ctx->source,
+			(uint32_t)(1 << (ctx->audio_track - 1)));
+		obs_log(LOG_INFO, "LTC audio track changed to %d",
+			ctx->audio_track);
+	}
+
 	/* Restart NTP thread to pick up new server immediately */
 	if (server_changed) {
 		stop_ntp_thread(ctx);
 		ctx->first_sync_done = false;
 		start_ntp_thread(ctx);
 	}
+
+#ifdef ENABLE_FRONTEND_API
+	/* Update metadata writer with current settings */
+	{
+		const char *sync_str = "local";
+		switch (ctx->sync_method) {
+		case SYNC_METHOD_NTP:
+			sync_str = "NTP";
+			break;
+		case SYNC_METHOD_HTTP:
+			sync_str = "HTTP";
+			break;
+		case SYNC_METHOD_LOCAL:
+			sync_str = "local";
+			break;
+		default:
+			break;
+		}
+		char fps_label[16];
+		snprintf(fps_label, sizeof(fps_label), "%d",
+			 ctx->nominal_fps);
+		metadata_writer_set_info(ctx->metadata, ctx->camera_id,
+					fps_label, ctx->ntp_server,
+					ctx->ntp_synced,
+					ctx->ntp_offset_ms, sync_str);
+	}
+#endif
 }
 
 /* ---- Properties UI ---- */
@@ -588,6 +723,57 @@ static obs_properties_t *ltc_source_get_properties(void *data)
 	obs_property_list_add_int(interval_prop, "10 min", 600);
 	obs_property_list_add_int(interval_prop, "30 min", 1800);
 
+	/* Camera ID dropdown */
+	obs_property_t *cam_prop = obs_properties_add_list(
+		props, S_CAMERA_ID, obs_module_text("CameraID"),
+		OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+	obs_property_list_add_int(cam_prop, "Kamera A", 0);
+	obs_property_list_add_int(cam_prop, "Kamera B", 1);
+	obs_property_list_add_int(cam_prop, "Kamera C", 2);
+	obs_property_list_add_int(cam_prop, "Kamera D", 3);
+	obs_property_list_add_int(cam_prop, "Kamera E", 4);
+	obs_property_list_add_int(cam_prop, "Kamera F", 5);
+	obs_property_list_add_int(cam_prop, "Kamera G", 6);
+	obs_property_list_add_int(cam_prop, "Kamera H", 7);
+
+	/* Audio track selection */
+	obs_property_t *track_prop = obs_properties_add_list(
+		props, S_AUDIO_TRACK, obs_module_text("AudioTrack"),
+		OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+	obs_property_list_add_int(track_prop, "Track 1", 1);
+	obs_property_list_add_int(track_prop, "Track 2", 2);
+	obs_property_list_add_int(track_prop, "Track 3", 3);
+	obs_property_list_add_int(track_prop, "Track 4", 4);
+	obs_property_list_add_int(track_prop, "Track 5", 5);
+	obs_property_list_add_int(track_prop, "Track 6", 6);
+
+#ifdef ENABLE_FRONTEND_API
+	/* Check if selected track is being recorded */
+	if (ctx) {
+		config_t *profile = obs_frontend_get_profile_config();
+		if (profile) {
+			uint64_t simple_tracks =
+				config_get_uint(profile, "SimpleOutput",
+						"RecTracks");
+			uint64_t adv_tracks =
+				config_get_uint(profile, "AdvOut",
+						"RecTracks");
+			/* Combine both — user may be in either output mode */
+			uint64_t rec_tracks = simple_tracks | adv_tracks;
+			uint64_t track_bit =
+				(uint64_t)(1 << (ctx->audio_track - 1));
+
+			if (rec_tracks > 0 &&
+			    !(rec_tracks & track_bit)) {
+				obs_properties_add_text(
+					props, "_track_warning",
+					obs_module_text("TrackNotRecorded"),
+					OBS_TEXT_INFO);
+			}
+		}
+	}
+#endif
+
 	/* NTP status (informational) */
 	obs_properties_add_text(props, "_ntp_status",
 				obs_module_text("NTPStatus"), OBS_TEXT_INFO);
@@ -613,6 +799,8 @@ static void ltc_source_get_defaults(obs_data_t *settings)
 	obs_data_set_default_int(settings, S_FRAMERATE, 0);
 	obs_data_set_default_string(settings, S_NTP_SERVER, "pool.ntp.org");
 	obs_data_set_default_int(settings, S_SYNC_INTERVAL, 300);
+	obs_data_set_default_int(settings, S_CAMERA_ID, 0);
+	obs_data_set_default_int(settings, S_AUDIO_TRACK, 3);
 }
 
 /* ---- Source registration ---- */

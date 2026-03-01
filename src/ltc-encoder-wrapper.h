@@ -36,15 +36,21 @@ ltc_wrapper_t *ltc_wrapper_create(int sample_rate, tc_framerate_t fps);
 void ltc_wrapper_destroy(ltc_wrapper_t *w);
 
 /*
- * Set the current timecode to encode.
+ * Set the current timecode to encode, including date and camera ID
+ * for LTC User Bits (SMPTE 12M).
  *
- * @param w   Encoder context
- * @param h   Hours (0-23)
- * @param m   Minutes (0-59)
- * @param s   Seconds (0-59)
- * @param f   Frames (0 to fps-1)
+ * @param w          Encoder context
+ * @param h          Hours (0-23)
+ * @param m          Minutes (0-59)
+ * @param s          Seconds (0-59)
+ * @param f          Frames (0 to fps-1)
+ * @param year       Two-digit year (0-99)
+ * @param month      Month (1-12)
+ * @param day        Day (1-31)
+ * @param camera_id  Camera identifier (0-7, maps to A-H)
  */
-void ltc_wrapper_set_timecode(ltc_wrapper_t *w, int h, int m, int s, int f);
+void ltc_wrapper_set_timecode(ltc_wrapper_t *w, int h, int m, int s, int f,
+			      int year, int month, int day, int camera_id);
 
 /*
  * Increment the encoder's internal timecode by one frame.

@@ -110,3 +110,40 @@ TEST(TimecodeTest, NullPointerSafety)
 	char buf[16];
 	timecode_to_string(nullptr, buf, sizeof(buf));
 }
+
+TEST(TimecodeTest, DateExtraction)
+{
+	smpte_timecode_t tc;
+	/* 2026-03-15 14:30:22 UTC = Unix 1773854222 */
+	/* Precomputed: days since epoch for 2026-03-15 = 20527 */
+	/* 20527 * 86400 = 1773532800, + 14*3600 + 30*60 + 22 = 1773585022 */
+	int64_t unix_sec = 1773532800LL + 14 * 3600 + 30 * 60 + 22;
+	ASSERT_TRUE(timecode_from_unix(unix_sec, 0, TC_FPS_25, &tc));
+	EXPECT_EQ(tc.year, 26);
+	EXPECT_EQ(tc.month, 3);
+	EXPECT_EQ(tc.day, 15);
+	EXPECT_EQ(tc.hours, 14);
+	EXPECT_EQ(tc.minutes, 30);
+	EXPECT_EQ(tc.seconds, 22);
+}
+
+TEST(TimecodeTest, DateEpoch)
+{
+	smpte_timecode_t tc;
+	/* Unix epoch: 1970-01-01 */
+	ASSERT_TRUE(timecode_from_unix(0, 0, TC_FPS_25, &tc));
+	EXPECT_EQ(tc.year, 70);
+	EXPECT_EQ(tc.month, 1);
+	EXPECT_EQ(tc.day, 1);
+}
+
+TEST(TimecodeTest, DateLeapYear)
+{
+	smpte_timecode_t tc;
+	/* 2024-02-29 (leap year) = days since epoch 19782 */
+	/* 19782 * 86400 = 1709164800 */
+	ASSERT_TRUE(timecode_from_unix(1709164800LL, 0, TC_FPS_25, &tc));
+	EXPECT_EQ(tc.year, 24);
+	EXPECT_EQ(tc.month, 2);
+	EXPECT_EQ(tc.day, 29);
+}

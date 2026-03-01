@@ -33,6 +33,10 @@ typedef struct {
 	uint8_t frames;
 	tc_framerate_t fps;
 	bool drop_frame;
+	/* Date (SMPTE 12M User Bits) */
+	uint8_t year;  /* 0-99, two-digit year */
+	uint8_t month; /* 1-12 */
+	uint8_t day;   /* 1-31 */
 } smpte_timecode_t;
 
 /*

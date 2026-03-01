@@ -26,6 +26,10 @@ if(ENABLE_FRONTEND_API)
   target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::obs-frontend-api)
 endif()
 
+# libcurl for HTTP time fallback
+find_package(CURL REQUIRED)
+target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE CURL::libcurl)
+
 if(ENABLE_QT)
   find_package(Qt6 COMPONENTS Widgets Core)
   target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE Qt6::Core Qt6::Widgets)
@@ -57,6 +61,10 @@ target_sources(
           src/ltc-encoder-wrapper.h
           src/auto-setup.c
           src/auto-setup.h
+          src/http-time-client.c
+          src/http-time-client.h
+          src/metadata-writer.c
+          src/metadata-writer.h
 )
 
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")

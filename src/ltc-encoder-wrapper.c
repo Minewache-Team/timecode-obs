@@ -89,7 +89,8 @@ void ltc_wrapper_destroy(ltc_wrapper_t *w)
 	free(w);
 }
 
-void ltc_wrapper_set_timecode(ltc_wrapper_t *w, int h, int m, int s, int f)
+void ltc_wrapper_set_timecode(ltc_wrapper_t *w, int h, int m, int s, int f,
+			      int year, int month, int day, int camera_id)
 {
 	if (!w || !w->encoder)
 		return;
@@ -98,15 +99,26 @@ void ltc_wrapper_set_timecode(ltc_wrapper_t *w, int h, int m, int s, int f)
 	memset(&st, 0, sizeof(st));
 
 	snprintf(st.timezone, sizeof(st.timezone), "+0000");
-	st.years = 0;
-	st.months = 0;
-	st.days = 0;
+	st.years = (unsigned char)(year % 100);
+	st.months = (unsigned char)month;
+	st.days = (unsigned char)day;
 	st.hours = h;
 	st.mins = m;
 	st.secs = s;
 	st.frame = f;
 
 	ltc_encoder_set_timecode(w->encoder, &st);
+
+	/* Store camera ID in user bits 7 (not used by SMPTE date encoding).
+	 * ltc_frame_increment() never touches user7/user8, so camera ID
+	 * persists across inc_timecode calls. */
+	if (camera_id >= 0 && camera_id <= 7) {
+		LTCFrame ltc_frame;
+		ltc_encoder_get_frame(w->encoder, &ltc_frame);
+		ltc_frame.user7 = (unsigned int)(camera_id & 0x0F);
+		ltc_frame.user8 = 0;
+		ltc_encoder_set_frame(w->encoder, &ltc_frame);
+	}
 }
 
 void ltc_wrapper_inc_timecode(ltc_wrapper_t *w)

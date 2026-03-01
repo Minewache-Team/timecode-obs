@@ -6,6 +6,23 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Civil date from Unix epoch day count (Howard Hinnant algorithm) */
+static void civil_from_days(int64_t day_count, int *y, int *m, int *d)
+{
+	day_count += 719468;
+	int64_t era = (day_count >= 0 ? day_count : day_count - 146096) / 146097;
+	int64_t doe = day_count - era * 146097;
+	int64_t yoe =
+		(doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+	*y = (int)(yoe + era * 400);
+	int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+	int64_t mp = (5 * doy + 2) / 153;
+	*d = (int)(doy - (153 * mp + 2) / 5 + 1);
+	*m = (int)(mp < 10 ? mp + 3 : mp - 9);
+	if (*m <= 2)
+		(*y)++;
+}
+
 bool timecode_from_unix(int64_t unix_sec, int64_t unix_usec, tc_framerate_t fps, smpte_timecode_t *out)
 {
 	if (!out)
@@ -19,6 +36,17 @@ bool timecode_from_unix(int64_t unix_sec, int64_t unix_usec, tc_framerate_t fps,
 	int64_t day_seconds = unix_sec % 86400;
 	if (day_seconds < 0)
 		day_seconds += 86400;
+
+	/* Extract date from Unix timestamp */
+	int64_t day_count = unix_sec / 86400;
+	if (unix_sec < 0 && unix_sec % 86400 != 0)
+		day_count--; /* floor division for negative timestamps */
+
+	int cy, cm, cd;
+	civil_from_days(day_count, &cy, &cm, &cd);
+	out->year = (uint8_t)(cy % 100);
+	out->month = (uint8_t)cm;
+	out->day = (uint8_t)cd;
 
 	uint8_t h = (uint8_t)(day_seconds / 3600);
 	uint8_t m = (uint8_t)((day_seconds % 3600) / 60);

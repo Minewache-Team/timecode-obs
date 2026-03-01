@@ -49,7 +49,7 @@ TEST(LTCRoundtripTest, EncodeProducesSamples)
 	ltc_wrapper_t *w = ltc_wrapper_create(48000, TC_FPS_25);
 	ASSERT_NE(w, nullptr);
 
-	ltc_wrapper_set_timecode(w, 12, 30, 45, 10);
+	ltc_wrapper_set_timecode(w, 12, 30, 45, 10, 0, 0, 0, 0);
 
 	float buffer[4800];
 	int samples = ltc_wrapper_encode_frame(w, buffer, 4800);
@@ -75,7 +75,7 @@ TEST(LTCRoundtripTest, IncTimecodeWorks)
 	ltc_wrapper_t *w = ltc_wrapper_create(48000, TC_FPS_25);
 	ASSERT_NE(w, nullptr);
 
-	ltc_wrapper_set_timecode(w, 12, 0, 0, 0);
+	ltc_wrapper_set_timecode(w, 12, 0, 0, 0, 0, 0, 0, 0);
 
 	/* Encode frame 0, then increment and encode frame 1 */
 	float buf1[4800], buf2[4800];
@@ -123,7 +123,7 @@ TEST(LTCRoundtripTest, RoundtripTimecode25fps)
 	ASSERT_NE(w, nullptr);
 
 	/* Encode timecode 14:30:22:15 */
-	ltc_wrapper_set_timecode(w, 14, 30, 22, 15);
+	ltc_wrapper_set_timecode(w, 14, 30, 22, 15, 26, 3, 1, 0);
 
 	float buffer[4800];
 	int samples = ltc_wrapper_encode_frame(w, buffer, 4800);
@@ -175,7 +175,7 @@ TEST(LTCRoundtripTest, MultiFrameRoundtrip25fps)
 	float *all_audio = new float[total_max];
 	int total_samples = 0;
 
-	ltc_wrapper_set_timecode(w, 10, 0, 0, 0);
+	ltc_wrapper_set_timecode(w, 10, 0, 0, 0, 26, 3, 1, 0);
 
 	for (int f = 0; f < num_frames; f++) {
 		float buffer[4800];
@@ -248,7 +248,7 @@ TEST(LTCRoundtripTest, ContinuousTimecodeSequence25fps)
 	ASSERT_NE(w, nullptr);
 
 	/* Start at 23:59:58:00 to also test midnight rollover in sequence */
-	ltc_wrapper_set_timecode(w, 23, 59, 58, 0);
+	ltc_wrapper_set_timecode(w, 23, 59, 58, 0, 26, 3, 1, 0);
 
 	/* Encode all frames into one large buffer */
 	const int total_max = spf * num_frames + 4000;
@@ -312,6 +312,76 @@ TEST(LTCRoundtripTest, ContinuousTimecodeSequence25fps)
 
 	EXPECT_GT(decoded_count, 5)
 		<< "Expected to decode multiple consecutive frames for continuity check";
+
+	delete[] all_audio;
+	delete[] byte_buf;
+	ltc_decoder_free(decoder);
+	ltc_wrapper_destroy(w);
+}
+
+/*
+ * Verify that date (SMPTE 12M User Bits) and camera ID survive
+ * the encode/decode roundtrip.
+ */
+TEST(LTCRoundtripTest, DateAndCameraIDRoundtrip)
+{
+	const int sample_rate = 48000;
+	const int spf = sample_rate / 25;
+
+	ltc_wrapper_t *w = ltc_wrapper_create(sample_rate, TC_FPS_25);
+	ASSERT_NE(w, nullptr);
+
+	/* 2026-03-15, camera C (id=2) */
+	ltc_wrapper_set_timecode(w, 14, 30, 22, 15, 26, 3, 15, 2);
+
+	/* Encode 10 frames */
+	const int num_frames = 10;
+	const int total_max = spf * num_frames + 1000;
+	float *all_audio = new float[total_max];
+	int total_samples = 0;
+
+	for (int f = 0; f < num_frames; f++) {
+		float buffer[4800];
+		int samples = ltc_wrapper_encode_frame(w, buffer, 4800);
+		ASSERT_GT(samples, 0);
+		memcpy(&all_audio[total_samples], buffer,
+		       (size_t)samples * sizeof(float));
+		total_samples += samples;
+		ltc_wrapper_inc_timecode(w);
+	}
+
+	/* Convert to byte samples and decode */
+	ltcsnd_sample_t *byte_buf = new ltcsnd_sample_t[total_samples];
+	for (int i = 0; i < total_samples; i++) {
+		byte_buf[i] =
+			(ltcsnd_sample_t)((all_audio[i] * 128.0f) + 128.0f);
+	}
+
+	LTCDecoder *decoder = ltc_decoder_create(spf, 32);
+	ASSERT_NE(decoder, nullptr);
+
+	ltc_decoder_write(decoder, byte_buf, (size_t)total_samples, 0);
+
+	LTCFrameExt frame;
+	bool decoded = false;
+	while (ltc_decoder_read(decoder, &frame)) {
+		SMPTETimecode stime;
+		ltc_frame_to_time(&stime, &frame.ltc, LTC_USE_DATE);
+
+		/* Verify date fields */
+		EXPECT_EQ(stime.years, 26);
+		EXPECT_EQ(stime.months, 3);
+		EXPECT_EQ(stime.days, 15);
+
+		/* Verify camera ID in user7 */
+		EXPECT_EQ(frame.ltc.user7, 2u);
+		EXPECT_EQ(frame.ltc.user8, 0u);
+
+		decoded = true;
+		break;
+	}
+	EXPECT_TRUE(decoded)
+		<< "Failed to decode LTC frames for date/camera roundtrip";
 
 	delete[] all_audio;
 	delete[] byte_buf;
