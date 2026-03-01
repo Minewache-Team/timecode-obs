@@ -29,6 +29,14 @@ add_executable(test-ltc-roundtrip test-ltc-roundtrip.cpp "${CMAKE_SOURCE_DIR}/sr
 target_link_libraries(test-ltc-roundtrip PRIVATE GTest::gtest_main libltc)
 add_test(NAME LTCRoundtripTests COMMAND test-ltc-roundtrip)
 
+# Copy libltc shared library next to test executable so it can be found at runtime
+if(WIN32)
+  add_custom_command(TARGET test-ltc-roundtrip POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:libltc> $<TARGET_FILE_DIR:test-ltc-roundtrip>
+    COMMENT "Copying libltc.dll to test directory"
+  )
+endif()
+
 # --- test-http-time ---
 find_package(CURL REQUIRED)
 add_executable(test-http-time test-http-time.cpp "${CMAKE_SOURCE_DIR}/src/http-time-client.c")

@@ -232,9 +232,9 @@ ctest --output-on-failure
 
 ## License
 
-This plugin is licensed under the [GNU General Public License v2.0](LICENSE).
+This plugin is licensed under the [GNU General Public License v2.0 or later](LICENSE) (SPDX: `GPL-2.0-or-later`).
 
-It uses [libltc](https://github.com/x42/libltc) which is licensed under LGPL-3.0. Object files are available for relinking upon request.
+It uses [libltc](https://github.com/x42/libltc) which is licensed under LGPL-3.0. libltc is dynamically linked as a shared library to comply with LGPL requirements.
 
 ## Credits
 

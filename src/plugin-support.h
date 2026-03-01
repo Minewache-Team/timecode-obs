@@ -1,6 +1,6 @@
 /*
-Plugin Name
-Copyright (C) <Year> <Developer> <Email Address>
+obs-ltc-timecode - NTP-synced LTC timecode audio source for OBS Studio
+Copyright (C) 2024-2026 Ferdmusic
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by

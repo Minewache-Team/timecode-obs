@@ -1,4 +1,7 @@
-# BuildLibLTC.cmake - Build libltc from submodule as a static library
+# BuildLibLTC.cmake - Build libltc from submodule as a shared library
+#
+# libltc is LGPLv3 licensed. We build it as a shared library (DLL/SO)
+# to comply with LGPL requirements (Section 4d1: shared library mechanism).
 
 set(LIBLTC_DIR "${CMAKE_SOURCE_DIR}/deps/libltc")
 
@@ -7,7 +10,7 @@ if(NOT EXISTS "${LIBLTC_DIR}/src/ltc.h")
 endif()
 
 add_library(
-  libltc STATIC
+  libltc SHARED
   "${LIBLTC_DIR}/src/ltc.c"
   "${LIBLTC_DIR}/src/encoder.c"
   "${LIBLTC_DIR}/src/decoder.c"
@@ -15,6 +18,12 @@ add_library(
 )
 
 target_include_directories(libltc PUBLIC "${LIBLTC_DIR}/src")
+
+# On Windows, use a .def file to export public API symbols
+# (libltc has no __declspec(dllexport) macros)
+if(WIN32)
+  target_sources(libltc PRIVATE "${CMAKE_SOURCE_DIR}/deps/libltc.def")
+endif()
 
 # Suppress warnings in third-party code
 if(MSVC)
@@ -29,3 +38,9 @@ if(UNIX)
 endif()
 
 set_target_properties(libltc PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# Set output directories so the shared lib ends up next to the plugin
+set_target_properties(libltc PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+  LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)

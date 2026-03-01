@@ -24,9 +24,11 @@
 ; Source paths: CI uses release/ staging, local builds use build_x64/ directly
 #ifdef UseLocalBuild
   #define DllSource "..\build_x64\" + Configuration + "\" + PluginName + ".dll"
+  #define LibltcDllSource "..\build_x64\" + Configuration + "\libltc.dll"
   #define DataSource "..\data\*"
 #else
   #define DllSource "..\release\" + Configuration + "\" + PluginName + "\bin\64bit\" + PluginName + ".dll"
+  #define LibltcDllSource "..\release\" + Configuration + "\" + PluginName + "\bin\64bit\libltc.dll"
   #define DataSource "..\release\" + Configuration + "\" + PluginName + "\data\*"
 #endif
 
@@ -63,6 +65,12 @@ Name: "german"; MessagesFile: "compiler:Languages\German.isl"
 [Files]
 ; Plugin DLL
 Source: "{#DllSource}"; DestDir: "{app}\bin\64bit"; Flags: ignoreversion
+
+; libltc shared library (LGPLv3 — dynamically linked for LGPL compliance)
+Source: "{#LibltcDllSource}"; DestDir: "{app}\bin\64bit"; Flags: ignoreversion
+
+; libltc license (LGPLv3 — required by LGPL Section 4a/4b)
+Source: "..\deps\libltc\COPYING"; DestDir: "{app}\licenses\libltc"; DestName: "COPYING.LGPLv3"; Flags: ignoreversion
 
 ; Data files (locale etc.)
 Source: "{#DataSource}"; DestDir: "{app}\data"; Flags: ignoreversion recursesubdirs createallsubdirs

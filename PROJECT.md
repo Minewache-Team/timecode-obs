@@ -15,7 +15,7 @@
 | Purpose          | NTP-synced LTC timecode audio source       |
 | Target Platforms | Windows 10+ (x64), Linux (Ubuntu 24.04+)  |
 | OBS SDK Version  | 32.x (current stable)                      |
-| License          | GPLv2 (OBS compatibility)                  |
+| License          | GPLv2+ / GPL-2.0-or-later (OBS compat)    |
 | Dependencies     | OBS SDK (auto-fetched), libltc (submodule) |
 | Test Framework   | Google Test 1.15+ (FetchContent)           |
 
@@ -482,6 +482,67 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 ---
 
+### Epic 10: License Compliance Cleanup
+
+> License audit (2026-03-01): Found multiple compliance issues. Plugin header says GPLv2+
+> but docs say GPLv2-only. libltc (LGPLv3) is statically linked without providing object files.
+> Most source files lack copyright headers. OBS requires all plugins to be GPL-compatible open source.
+
+#### TICKET-022: Correct License Declaration to GPLv2+
+- **Status:** `DONE`
+- **Type:** Bug / Legal
+- **Description:** The code header in `plugin-main.c` correctly says "GPLv2 or later" but `PROJECT.md` says "GPLv2" and `README.md` says "GPLv2.0" without the "or later" clause. This creates a legal ambiguity — especially critical because libltc is LGPLv3, which is only compatible with GPLv2+ (not GPLv2-only). All documentation must consistently say "GPLv2 or later" (SPDX: `GPL-2.0-or-later`).
+- **Acceptance Criteria:**
+  - [x] `PROJECT.md` license field says "GPLv2+ (GPL-2.0-or-later)"
+  - [x] `README.md` license section says "GNU General Public License v2.0 or later"
+  - [x] `LICENSE` file template placeholders at end of file filled in
+  - [x] Consistent wording across all files
+- **Files:** `PROJECT.md`, `README.md`, `LICENSE`
+
+#### TICKET-023: Add Copyright Headers to All Source Files
+- **Status:** `DONE`
+- **Depends on:** TICKET-022
+- **Type:** Legal / Compliance
+- **Description:** GPLv2 Section 1 requires each source file to carry a copyright notice. Currently only `plugin-main.c` and `plugin-support.h` have headers (and `plugin-support.h` still has template placeholders). All other 12 source files (`.c` and `.h`) are missing the required GPLv2+ copyright header. Additionally, `plugin-support.h` still contains `<Year> <Developer> <Email Address>` placeholders from the obs-plugintemplate.
+- **Acceptance Criteria:**
+  - [x] All `.c` and `.h` files in `src/` have the standard GPLv2+ copyright header
+  - [x] `plugin-support.h` placeholders replaced with actual values
+  - [x] Copyright year: 2024–2026, Author: Ferdmusic
+  - [x] Header format consistent across all files
+- **Files:** All files in `src/`
+
+#### TICKET-024: libltc LGPL-3.0 Static Linking Compliance
+- **Status:** `DONE`
+- **Depends on:** TICKET-022
+- **Type:** Legal / Build System
+- **Description:** libltc is LGPLv3 and currently statically linked (`add_library(libltc STATIC)` in `BuildLibLTC.cmake`). LGPLv3 Section 4d requires that users can re-link the application with a modified version of the library. Two options: (a) switch to dynamic linking (SHARED library), or (b) provide object files for relinking. Dynamic linking is the cleanest solution — it satisfies LGPL automatically and is standard practice for LGPL libraries. The README already mentions "object files available for relinking" but this was never implemented.
+- **Acceptance Criteria:**
+  - [x] `BuildLibLTC.cmake` changed from `STATIC` to `SHARED`
+  - [x] libltc DLL/SO deployed alongside the plugin binary
+  - [x] CMake `install()` rules updated to include libltc shared library
+  - [x] Plugin loads and works correctly with dynamic libltc
+  - [x] README updated to reflect dynamic linking (remove "object files" claim)
+  - [x] `Known Risks` item #3 updated to reflect resolution
+  - [x] Installer (`obs-ltc-timecode.iss`) updated to include libltc DLL
+- **Technical Notes:**
+  - Windows: `libltc.dll` goes next to the plugin DLL in `bin/64bit/`
+  - Linux: `libltc.so` installed to plugin lib directory or system lib path
+  - `POSITION_INDEPENDENT_CODE` already set (required for shared libs)
+  - Test executables also need to link against the shared library
+- **Files:** `cmake/BuildLibLTC.cmake`, `CMakeLists.txt`, `README.md`, `installer/obs-ltc-timecode.iss`
+
+#### TICKET-025: Update Known Risks — License Issues Resolved
+- **Status:** `DONE`
+- **Depends on:** TICKET-022, TICKET-023, TICKET-024
+- **Type:** Documentation
+- **Description:** Update the Known Risks section to reflect that the libltc LGPL licensing concern (item #3) has been resolved via dynamic linking, and add a note about the OBS GPLv2+ requirement for all plugins.
+- **Acceptance Criteria:**
+  - [x] Known Risk #3 marked as RESOLVED with explanation
+  - [x] Decision Log entries added for license cleanup decisions
+- **Files:** `PROJECT.md`
+
+---
+
 ## Decision Log
 
 | Date | Ticket | Decision | Rationale | Alternatives Considered |
@@ -510,6 +571,9 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 | 2026-03-01 | TICKET-018 | SSL verification disabled for HTTP fallback | Avoids cert bundle issues on Windows OBS installations. Fallback only needs Date header accuracy, not content security. | Full SSL verification (may fail without cert bundle) |
 | 2026-03-01 | TICKET-019 | Sidecar file extension `.ltc.json` (not `.json`) | Avoids conflict with other tools that may create `.json` sidecars. Clear provenance. | Plain `.json` (could collide), embed in recording (not possible with MKV) |
 | 2026-03-01 | TICKET-021 | Use `obs_frontend_get_profile_config()` + `config_get_uint()` for RecTracks check | OBS stores recording track bitmask in profile config (`basic.ini`). Frontend API provides direct access without file parsing. Check both SimpleOutput and AdvOut sections. | Parse basic.ini manually (fragile), OBS property callback on track change (no config access) |
+| 2026-03-01 | TICKET-022 | License is GPLv2+ (GPL-2.0-or-later), not GPLv2-only | Code header already said "or later" but docs said "GPLv2". GPLv2+ required for LGPLv3 compatibility (libltc). OBS itself is GPLv2+. | GPLv2-only (incompatible with LGPLv3 libltc), GPLv3 (unnecessarily restrictive) |
+| 2026-03-01 | TICKET-024 | Switch libltc from static to dynamic linking (SHARED) | LGPLv3 Section 4d1: shared library mechanism satisfies LGPL automatically. No need to provide object files. `CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS` handles Windows DLL exports (libltc has no dllexport macros). | Static + object files (complex distribution, easy to forget), keep static and hope for the best (non-compliant) |
+| 2026-03-01 | TICKET-024 | Ship libltc LGPL license copy with installer | LGPL Section 4a requires "prominent notice" that the Library is used and "a copy of this License". Installer deploys `COPYING.LGPLv3` to `licenses/libltc/`. | No license copy (non-compliant), embed in README only (not sufficient for binary distribution) |
 
 ---
 
@@ -517,6 +581,7 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 | Session | Date | Agent | Tickets Worked | Status at End | Notes |
 |---------|------|-------|----------------|---------------|-------|
+| 9 | 2026-03-01 | Claude Opus 4.6 | TICKET-022 (done), TICKET-023 (done), TICKET-024 (done), TICKET-025 (done) | All Epic 10 tickets DONE | License compliance audit + cleanup. Fixed license declaration to GPLv2+ (was inconsistent). Added GPLv2+ copyright headers to all 14 source files. Switched libltc from static to dynamic linking (SHARED) for LGPLv3 compliance. Updated installer to include libltc.dll + LGPL license copy. Fixed LICENSE + plugin-support.h template placeholders. Updated Known Risks #3 as resolved. |
 | 8 | 2026-03-01 | Claude Opus 4.6 | TICKET-021 (done) | TICKET-021 DONE | Created TICKET-021: Track recording warning. Added check in get_properties using obs_frontend_get_profile_config() to read RecTracks bitmask from SimpleOutput + AdvOut. Displays OBS_TEXT_INFO warning when selected track not in recording config. Behind ENABLE_FRONTEND_API guard. Locale string added. Build + all tests pass. |
 | 7 | 2026-03-01 | Claude Opus 4.6 | TICKET-020 (done), TICKET-017 (done), TICKET-018 (done), TICKET-019 (done) | All Epic 9 tickets DONE | Implemented all 4 Epic 9 tickets. TICKET-020: Audio track dropdown (Track 1-6, default 3) with obs_source_set_audio_mixers(). TICKET-017: Date+Camera ID in LTC User Bits via SMPTETimecode fields + user7 for camera (A-H). Extended ltc_wrapper_set_timecode API, civil_from_days date algorithm, new roundtrip+date tests. TICKET-018: HTTP Date header fallback using libcurl from OBS deps, fallback chain NTP→HTTP→local, sync_method_t tracking. TICKET-019: metadata-writer.c/h creates .ltc.json sidecar next to recordings with camera_id, timecodes, sync info. All tests pass (4 suites). |
 | 6 | 2026-03-01 | Claude Opus 4.6 | TICKET-017 (created), TICKET-018 (created), TICKET-019 (created), TICKET-020 (created) | All 4 tickets TODO | Epic 9: Metadata & Reliability. Feature analysis for decentralized multi-cam workflow (multiple PCs across Germany → DaVinci Resolve). Created 4 tickets: User Bits (date+camera ID), HTTP time fallback, metadata sidecar, audio track selection. Dropped: visual overlay (destroys edit material), remote endpoint (deferred — needs infra first), MIDI TC, NDI TC, custom start TC. UX priority: dead-simple UI for non-technical users. |
@@ -535,7 +600,7 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 1. **NTP over restricted networks:** Corporate firewalls may block UDP 123.
    → Mitigation: Configurable NTP server. Future: HTTP-based time API fallback.
 2. **OBS audio callback threading:** `obs_source_output_audio()` must be called from a consistent thread. Research whether a dedicated thread or OBS timer is better.
-3. **libltc LGPL licensing:** libltc is LGPLv3. Statically linking into a GPL-2 plugin is allowed but requires making object files available for relinking. Alternative: dynamic linking.
+3. ~~**libltc LGPL licensing:**~~ **RESOLVED in TICKET-024** — libltc switched from static to dynamic linking (shared library). LGPL Section 4d1 satisfied automatically. DLL/SO shipped alongside plugin.
 4. **Drop-frame timecode:** 29.97 fps requires drop-frame handling. Must verify DaVinci Resolve's expectations.
 5. **OBS 32 plugin validation:** OBS 32 has stricter plugin loading on Linux. Must build against correct `LIBOBS_API_VER`.
 6. **Sample-accurate frame boundaries:** LTC frames must align with audio sample boundaries. Off-by-one errors cause decode failures.

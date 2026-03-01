@@ -193,6 +193,15 @@ try {
     exit 1
 }
 
+# Copy libltc shared library (LGPLv3 — dynamically linked)
+$LibltcDll = Join-Path $BuildDir "libltc.dll"
+if (Test-Path $LibltcDll) {
+    Copy-Item $LibltcDll "$binDir\" -Force
+    Write-Host "[OK] Copied: libltc.dll -> $binDir\" -ForegroundColor Green
+} else {
+    Write-Host "[WARN] libltc.dll not found in build directory" -ForegroundColor Yellow
+}
+
 Copy-Item -Recurse -Force "$DataDir\*" "$dataDestDir\"
 Write-Host "[OK] Copied: data\ -> $dataDestDir\" -ForegroundColor Green
 
