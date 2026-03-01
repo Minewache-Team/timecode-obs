@@ -370,6 +370,98 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 ---
 
+### Epic 9: Metadata & Reliability Enhancements
+
+> Feature analysis session (2026-03-01): Identified useful additions for decentralized
+> multi-camera recording workflow (multiple PCs across Germany, footage merged in DaVinci Resolve).
+> Focus: DaVinci Resolve compatibility, metadata for automated sorting, sync reliability.
+> User constraint: Users are non-technical — UI must be dead simple.
+
+#### TICKET-017: LTC User Bits — Date & Camera ID
+- **Status:** `TODO`
+- **Depends on:** TICKET-006
+- **Type:** Feature
+- **Description:** Embed the current date and a configurable camera identifier into the LTC User Bits of every audio frame. The date uses SMPTE 12M format (DD:MM:YY in 6 nibbles). The camera ID uses the remaining 2 nibbles (1 byte, values 1–8). DaVinci Resolve reads User Bits automatically and displays them in the Media Pool, enabling camera identification and date verification in multi-cam workflows.
+- **Current State:** `ltc-encoder-wrapper.c:101-103` sets `st.years=0, st.months=0, st.days=0` — User Bits are all zeros despite `LTC_USE_DATE` being active in `ltc_encoder_create()`.
+- **Acceptance Criteria:**
+  - [ ] Date automatically embedded from NTP-corrected clock (no user config needed)
+  - [ ] `ltc_wrapper_set_timecode()` extended with date + camera_id parameters
+  - [ ] Camera ID as simple dropdown in Properties UI: "Kamera A" through "Kamera H" (default: "Kamera A")
+  - [ ] No free-text input for camera ID (User Bits only have 1 byte left after date)
+  - [ ] DaVinci Resolve displays date and camera info from imported LTC track
+  - [ ] Existing roundtrip tests updated to verify date + camera ID survive encode/decode
+  - [ ] Locale strings added for new UI elements
+- **UX Notes:** Camera dropdown must be obvious and self-explanatory. Labels are "Kamera A", "Kamera B", ..., "Kamera H" — not hex values or numbers. Users just pick their letter.
+- **Technical Notes:**
+  - libltc: `SMPTETimecode.years/months/days` → `ltc_time_to_frame()` writes date into User Bits
+  - Camera ID: `ltc_encoder_set_user_bits()` can set remaining nibbles after date encoding
+  - User Bits layout (32 bits): 6 nibbles date (24 bits) + 2 nibbles camera ID (8 bits)
+- **Files:** `src/ltc-encoder-wrapper.c/h` (extend API), `src/ltc-source.c` (UI + date/ID forwarding), `src/timecode.c/h` (date extraction helper), `data/locale/en-US.ini`, `tests/test-ltc-roundtrip.cpp`
+
+#### TICKET-018: HTTP/HTTPS Time Fallback for Restricted Networks
+- **Status:** `TODO`
+- **Depends on:** TICKET-003
+- **Type:** Enhancement
+- **Description:** When NTP (UDP port 123) is unreachable, automatically fall back to an HTTP-based time service. Primary use case: residential networks that are mostly fine, but as a redundancy measure for the occasional restrictive network (hotels, event venues, corporate guest WiFi). The fallback is fully automatic — no user configuration required.
+- **Acceptance Criteria:**
+  - [ ] New module `http-time-client.c/h` queries `worldtimeapi.org/api/ip` via HTTPS
+  - [ ] Fallback chain in NTP sync thread: NTP → HTTP → local clock
+  - [ ] HTTP fallback only attempted after NTP fails all retries
+  - [ ] Properties status display shows sync method: "NTP synced (+12ms)" / "HTTP synced (~200ms)" / "Not synced — local clock"
+  - [ ] Zero user configuration — fallback happens automatically
+  - [ ] HTTP timeout: 5 seconds (networks where HTTP works are usually fast)
+  - [ ] Unit test: mock HTTP response → verify time parsing
+  - [ ] Locale strings for new status messages
+- **UX Notes:** User sees only the status indicator change. No new settings, no toggles. It just works.
+- **Technical Notes:**
+  - Investigate OBS internal libcurl availability vs. minimal HTTP client
+  - HTTP Date header from any HTTPS server is an alternative to worldtimeapi.org
+  - Accuracy: ~100–500ms (vs NTP ~10–50ms). At 30 FPS (33ms/frame) = ±1–2 frames. Acceptable as fallback.
+  - Current behavior (fall back to local clock silently) remains as last resort
+- **Files:** `src/http-time-client.c/h` (new), `src/ltc-source.c` (fallback logic + status display), `data/locale/en-US.ini`, `tests/test-http-time.cpp` (new)
+- **Open Question:** HTTP library — can we use OBS's internal libcurl, or do we need a minimal client? Research needed.
+
+#### TICKET-019: Recording Metadata Sidecar File
+- **Status:** `TODO`
+- **Depends on:** TICKET-017
+- **Type:** Feature
+- **Description:** Automatically create a JSON sidecar file alongside each OBS recording. The file contains camera identity, timecodes, NTP sync quality, and recording settings. Enables automated post-production sorting and provides a quality audit trail for multi-camera shoots.
+- **Acceptance Criteria:**
+  - [ ] JSON file created at recording start, same folder + same base name as recording (e.g., `Recording_2026-03-01.mkv` → `Recording_2026-03-01.json`)
+  - [ ] End timecode and duration written at recording stop
+  - [ ] Content includes: `camera_id`, `start_timecode`, `end_timecode`, `duration_seconds`, `framerate`, `ntp_synced`, `ntp_offset_ms`, `resolution`, `obs_version`, `plugin_version`
+  - [ ] File created automatically — no toggle, no settings
+  - [ ] Handles edge cases: recording path not writable (log warning, don't crash), OBS crash before stop (partial file is still valid JSON with start data)
+  - [ ] Uses `obs_frontend_add_event_callback()` for `RECORDING_STARTED` / `RECORDING_STOPPED`
+- **UX Notes:** Completely invisible to the user. A small JSON file appears next to their recording. They can ignore it or use it for automation later.
+- **Technical Notes:**
+  - Recording output path: `obs_frontend_get_last_recording()` or `obs_frontend_get_current_record_output_path()`
+  - Write JSON manually (no JSON library needed for a simple flat object)
+  - Write start data immediately (valid JSON), append end data on stop
+  - Camera ID comes from TICKET-017 setting
+- **Files:** `src/metadata-writer.c/h` (new), `src/ltc-source.c` (frontend event hooks), `data/locale/en-US.ini`
+
+#### TICKET-020: Audio Track Selection in Plugin UI
+- **Status:** `TODO`
+- **Depends on:** TICKET-006
+- **Type:** Enhancement
+- **Description:** Add a dropdown in the plugin Properties to select which OBS audio track the LTC output is routed to. Without the Minewache template, users must manually configure track routing in OBS's Advanced Audio Properties — a confusing process for non-technical users. The dropdown makes this a one-click operation.
+- **Acceptance Criteria:**
+  - [ ] Dropdown in Properties: "Track 1" through "Track 6" (default: Track 3)
+  - [ ] Selection calls `obs_source_set_audio_mixers(source, bitmask)` with exclusive track
+  - [ ] Descriptive help text below dropdown explaining track purpose
+  - [ ] Setting persists via `obs_data`
+  - [ ] Changing the track takes effect immediately (no restart needed)
+  - [ ] Locale strings for label + help text
+- **UX Notes:** Help text: *"LTC audio is recorded only on this track. Default is Track 3, so it stays separate from voice (Track 1) and game audio (Track 2)."* Users just pick a track number from the list.
+- **Technical Notes:**
+  - `obs_source_set_audio_mixers()` takes a bitmask: Track 1 = 0x01, Track 2 = 0x02, Track 3 = 0x04, etc.
+  - Must be called after source creation and on every update
+  - Minewache template already sets `mixers=4` (Track 3) — this UI makes it configurable for non-template users
+- **Files:** `src/ltc-source.c` (UI + mixer API call), `data/locale/en-US.ini`
+
+---
+
 ## Decision Log
 
 | Date | Ticket | Decision | Rationale | Alternatives Considered |
@@ -389,6 +481,11 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 | 2026-03-01 | TICKET-015/016 | Template deploy only if not already present (`onlyifdoesntexist` / `-not Test-Path`) | Prevents overwriting user customizations to the Minewache scene collection. Uninstall also does NOT remove template. | Always overwrite (destroys user changes), ask user (adds friction) |
 | 2026-03-01 | TICKET-012 | Win32 MessageBoxA for first-run dialog (no Qt dependency) | Plugin has `ENABLE_QT=OFF`, so Qt dialogs unavailable. Win32 MessageBoxA is always available on Windows. On Linux: auto-switch without dialog (no universal GTK/zenity guarantee). | Qt dialog (requires ENABLE_QT), zenity subprocess (fragile, not always installed) |
 | 2026-03-01 | TICKET-012 | `obs_frontend_get_user_config()` instead of deprecated `get_global_config()` | `obs_frontend_get_global_config()` is marked `OBS_DEPRECATED` in OBS 31.x+ header. `get_user_config()` is the replacement. | `get_global_config()` (deprecated), custom config file (unnecessary complexity) |
+| 2026-03-01 | TICKET-017 | Camera ID as dropdown A–H (not free-text) | LTC User Bits: only 8 bits left after SMPTE 12M date (24 bits). Free-text impossible. Dropdown is idiot-proof for non-technical users. | Free-text (doesn't fit), numeric input (confusing), no camera ID (loses DaVinci Resolve sorting) |
+| 2026-03-01 | TICKET-017 | Date auto-embedded, no toggle | Users should never need to think about this. Date in User Bits is standard practice and costs nothing. | Optional toggle (unnecessary complexity, users would forget to enable it) |
+| 2026-03-01 | TICKET-018 | HTTP fallback fully automatic, no config | Users are non-technical. Fallback chain (NTP→HTTP→local) should just work. Status display shows which method is active. | Manual toggle (users wouldn't understand), config for HTTP endpoint (over-engineering for residential networks) |
+| 2026-03-01 | TICKET-019 | Sidecar always created, no toggle | A small JSON file next to the recording is harmless and invisible. Opt-in would mean non-technical users never enable it. | Opt-in toggle (users would miss it), no sidecar (loses metadata for automation) |
+| 2026-03-01 | Epic 9 | Dropped: visual overlay, remote endpoint, MIDI TC, NDI TC, custom start TC | Visual overlay destroys edit material. Remote endpoint needs infra first (deferred to future). MIDI/NDI not relevant for decentralized recording workflow. Custom start TC conflicts with time-of-day cross-location sync. | Include all features (scope creep, delays v0.2.0) |
 
 ---
 
@@ -396,6 +493,7 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 | Session | Date | Agent | Tickets Worked | Status at End | Notes |
 |---------|------|-------|----------------|---------------|-------|
+| 6 | 2026-03-01 | Claude Opus 4.6 | TICKET-017 (created), TICKET-018 (created), TICKET-019 (created), TICKET-020 (created) | All 4 tickets TODO | Epic 9: Metadata & Reliability. Feature analysis for decentralized multi-cam workflow (multiple PCs across Germany → DaVinci Resolve). Created 4 tickets: User Bits (date+camera ID), HTTP time fallback, metadata sidecar, audio track selection. Dropped: visual overlay (destroys edit material), remote endpoint (deferred — needs infra first), MIDI TC, NDI TC, custom start TC. UX priority: dead-simple UI for non-technical users. |
 | 5 | 2026-03-01 | Claude Opus 4.6 | TICKET-014 (done), TICKET-015 (done), TICKET-016 (done), TICKET-012 (done) | All 4 tickets DONE | Epic 8: MW OBS KIT Template Integration. Added LTC Timecode source to Minewache scene collection (mixers=4, Track 3 only). Updated basic.ini (RecTracks=7, Track3Name). Extended install.ps1 and Inno Setup installer to auto-deploy template. TICKET-012: Auto-setup dialog on first OBS start offers to switch to Minewache template. Uses obs-frontend-api (ENABLE_FRONTEND_API=ON), Win32 MessageBoxA on Windows, auto-switch on Linux. Config flag prevents re-prompting. |
 | 4 | 2026-02-27 | Claude Opus 4.6 | TICKET-011 (done), TICKET-013 (done), TICKET-012 (created) | TICKET-011+013 DONE | User feedback: plugin doesn't appear in OBS. **Root cause: wrong install path** — all docs said `%APPDATA%` but OBS loads from `%ProgramData%`. Fixed install.ps1, install.sh, README, Setup.md. Added plugin diagnostics (obs_module_description, verbose logging). Created TICKET-012 for auto-setup (pending). |
 | 3 | 2026-02-27 | Claude Opus 4.6 | TICKET-009 | README & docs done | Wrote comprehensive user-facing README.md: install instructions (Win/Linux), usage guide, multi-camera sync workflow, configuration reference, troubleshooting/FAQ, build-from-source guide, technical details. TICKET-008 skipped (requires physical 2-PC hardware test). TICKET-010 left for user (release tagging). |
