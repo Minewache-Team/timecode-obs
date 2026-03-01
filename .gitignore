@@ -27,7 +27,6 @@
 !install.sh
 !SECURITY_AUDIT.md
 !/[MW] OBS KIT
-
 # Exclude lock files
 *.lock.json
 
