@@ -15,11 +15,12 @@
  * You should have received a copy of the GNU General Public License along
  * with this program. If not, see <https://www.gnu.org/licenses/>
  *
- * auto-setup.c - First-run auto-setup for Minewache scene collection
+ * auto-setup.c - First-run auto-setup for Minewache-New scene collection
  *
- * On first OBS launch after plugin install, detects if the Minewache
+ * On first OBS launch after plugin install, detects if the Minewache-New
  * scene collection is available and offers to switch to it.
- * The Minewache template has LTC Timecode pre-configured on Track 3.
+ * Also detects legacy "Minewache" and offers upgrade to Minewache-New.
+ * The Minewache-New template has LTC Timecode pre-configured on Track 3.
  */
 
 #ifdef ENABLE_FRONTEND_API
@@ -37,8 +38,10 @@
 
 #define CONFIG_SECTION "obs-ltc-timecode"
 #define CONFIG_KEY_SETUP_DONE "auto_setup_done"
-#define SCENE_COLLECTION_NAME "Minewache"
-#define PROFILE_NAME "Minewache"
+#define SCENE_COLLECTION_NAME "Minewache-New"
+#define PROFILE_NAME "Minewache-New"
+#define LEGACY_SCENE_COLLECTION_NAME "Minewache"
+#define LEGACY_PROFILE_NAME "Minewache"
 
 static bool has_scene_collection(const char *name)
 {
@@ -90,9 +93,9 @@ static bool show_switch_dialog(void)
 #ifdef _WIN32
 	int result = MessageBoxA(
 		NULL,
-		"Das Minewache-Template mit vorkonfiguriertem "
+		"Das Minewache-New Template mit vorkonfiguriertem "
 		"LTC Timecode (Track 3) wurde erkannt.\n\n"
-		"Moechtest du zur Minewache Scene Collection wechseln?\n\n"
+		"Moechtest du zur Minewache-New Scene Collection wechseln?\n\n"
 		"Track 1: Stimmen Audio\n"
 		"Track 2: Ingame Audio\n"
 		"Track 3: LTC Timecode (fuer DaVinci Resolve Sync)",
@@ -102,7 +105,27 @@ static bool show_switch_dialog(void)
 #else
 	/* On Linux, auto-switch without dialog */
 	obs_log(LOG_INFO,
-		"Minewache scene collection found, switching automatically");
+		"Minewache-New scene collection found, switching automatically");
+	return true;
+#endif
+}
+
+static bool show_upgrade_dialog(void)
+{
+#ifdef _WIN32
+	int result = MessageBoxA(
+		NULL,
+		"Ein aelteres Minewache-Template wurde erkannt.\n\n"
+		"Moechtest du auf das neue Minewache-New Template "
+		"upgraden?\n\n"
+		"Das neue Template hat LTC Timecode vorkonfiguriert "
+		"auf Track 3.",
+		"OBS LTC Timecode - Upgrade",
+		MB_YESNO | MB_ICONQUESTION | MB_SYSTEMMODAL);
+	return result == IDYES;
+#else
+	obs_log(LOG_INFO,
+		"Legacy Minewache found, upgrading to Minewache-New");
 	return true;
 #endif
 }
@@ -132,10 +155,37 @@ static void on_frontend_event(enum obs_frontend_event event, void *data)
 		return;
 	}
 
-	/* Check if Minewache scene collection is installed */
+	/* Check if legacy Minewache is active and offer upgrade */
+	if (has_scene_collection(LEGACY_SCENE_COLLECTION_NAME) &&
+	    has_scene_collection(SCENE_COLLECTION_NAME)) {
+		if (is_current_scene_collection(LEGACY_SCENE_COLLECTION_NAME)) {
+			if (show_upgrade_dialog()) {
+				obs_log(LOG_INFO,
+					"upgrading from Minewache to "
+					"Minewache-New...");
+				obs_frontend_set_current_scene_collection(
+					SCENE_COLLECTION_NAME);
+				if (has_profile(PROFILE_NAME)) {
+					obs_frontend_set_current_profile(
+						PROFILE_NAME);
+				}
+				obs_log(LOG_INFO,
+					"upgrade complete: Minewache-New "
+					"active (LTC Timecode on Track 3)");
+			} else {
+				obs_log(LOG_INFO,
+					"user declined upgrade to "
+					"Minewache-New");
+			}
+			mark_setup_done();
+			return;
+		}
+	}
+
+	/* Check if Minewache-New scene collection is installed */
 	if (!has_scene_collection(SCENE_COLLECTION_NAME)) {
 		obs_log(LOG_INFO,
-			"Minewache scene collection not found, "
+			"Minewache-New scene collection not found, "
 			"skipping auto-setup");
 		return;
 	}
@@ -143,7 +193,7 @@ static void on_frontend_event(enum obs_frontend_event event, void *data)
 	/* Already active? Just mark done */
 	if (is_current_scene_collection(SCENE_COLLECTION_NAME)) {
 		obs_log(LOG_INFO,
-			"Minewache scene collection already active");
+			"Minewache-New scene collection already active");
 		mark_setup_done();
 		return;
 	}
@@ -151,22 +201,22 @@ static void on_frontend_event(enum obs_frontend_event event, void *data)
 	/* Ask user if they want to switch */
 	if (show_switch_dialog()) {
 		obs_log(LOG_INFO,
-			"switching to Minewache scene collection...");
+			"switching to Minewache-New scene collection...");
 		obs_frontend_set_current_scene_collection(
 			SCENE_COLLECTION_NAME);
 
 		if (has_profile(PROFILE_NAME)) {
 			obs_log(LOG_INFO,
-				"switching to Minewache profile...");
+				"switching to Minewache-New profile...");
 			obs_frontend_set_current_profile(PROFILE_NAME);
 		}
 
 		obs_log(LOG_INFO,
-			"auto-setup complete: Minewache template active "
-			"(LTC Timecode on Track 3)");
+			"auto-setup complete: Minewache-New template "
+			"active (LTC Timecode on Track 3)");
 	} else {
 		obs_log(LOG_INFO,
-			"user declined Minewache template switch");
+			"user declined Minewache-New template switch");
 	}
 
 	mark_setup_done();

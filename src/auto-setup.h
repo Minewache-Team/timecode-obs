@@ -15,10 +15,11 @@
  * You should have received a copy of the GNU General Public License along
  * with this program. If not, see <https://www.gnu.org/licenses/>
  *
- * auto-setup.h - First-run auto-setup for Minewache scene collection
+ * auto-setup.h - First-run auto-setup for Minewache-New scene collection
  *
  * On first OBS launch after plugin install, offers to switch to the
- * pre-configured Minewache scene collection with LTC on Track 3.
+ * pre-configured Minewache-New scene collection with LTC on Track 3.
+ * Also detects legacy "Minewache" and offers upgrade to Minewache-New.
  */
 
 #pragma once

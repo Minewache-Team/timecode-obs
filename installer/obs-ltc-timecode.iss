@@ -77,14 +77,14 @@ Source: "{#DataSource}"; DestDir: "{app}\data"; Flags: ignoreversion recursesubd
 
 ; MW OBS KIT Template - Scene Collection (only if not already customized by user)
 ; skipifsourcedoesntexist: template files are optional (not present in CI)
-Source: "{#TemplateSource}\Minewache.json"; DestDir: "{userappdata}\obs-studio\basic\scenes"; Flags: onlyifdoesntexist skipifsourcedoesntexist
+Source: "{#TemplateSource}\Minewache-New.json"; DestDir: "{userappdata}\obs-studio\basic\scenes"; Flags: onlyifdoesntexist skipifsourcedoesntexist
 
 ; MW OBS KIT Template - Profile (only if not already customized by user)
-Source: "{#TemplateSource}\Minewache\*"; DestDir: "{userappdata}\obs-studio\basic\profiles\Minewache"; Flags: onlyifdoesntexist recursesubdirs createallsubdirs skipifsourcedoesntexist
+Source: "{#TemplateSource}\Minewache-New\*"; DestDir: "{userappdata}\obs-studio\basic\profiles\Minewache-New"; Flags: onlyifdoesntexist recursesubdirs createallsubdirs skipifsourcedoesntexist
 
 [Dirs]
 Name: "{userappdata}\obs-studio\basic\scenes"
-Name: "{userappdata}\obs-studio\basic\profiles\Minewache"
+Name: "{userappdata}\obs-studio\basic\profiles\Minewache-New"
 
 [Code]
 function InitializeSetup(): Boolean;
@@ -112,8 +112,8 @@ begin
     MsgBox('Installation complete!' + #13#10#13#10 +
            'To use the plugin:' + #13#10 +
            '  1. Start OBS Studio' + #13#10 +
-           '  2. Scene Collection -> "Minewache"' + #13#10 +
-           '  3. Profile -> "Minewache"' + #13#10 +
+           '  2. Scene Collection -> "Minewache-New"' + #13#10 +
+           '  3. Profile -> "Minewache-New"' + #13#10 +
            '  4. LTC Timecode is pre-configured on Track 3' + #13#10#13#10 +
            'If OBS was running during installation, please restart it.',
            mbInformation, MB_OK);

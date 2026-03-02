@@ -209,15 +209,15 @@ Write-Host "[OK] Copied: data\ -> $dataDestDir\" -ForegroundColor Green
 # NOTE: [MW] contains brackets which are PowerShell wildcard chars — use -LiteralPath
 $ObsAppData = "$env:APPDATA\obs-studio"
 $TemplateDir = Join-Path $PSScriptRoot "[MW] OBS KIT"
-$SceneCollectionFile = Join-Path $TemplateDir "Minewache.json"
+$SceneCollectionFile = Join-Path $TemplateDir "Minewache-New.json"
 
 if (Test-Path -LiteralPath $SceneCollectionFile) {
     $scenesDir = "$ObsAppData\basic\scenes"
-    $profileDir = "$ObsAppData\basic\profiles\Minewache"
-    $targetScene = "$scenesDir\Minewache.json"
+    $profileDir = "$ObsAppData\basic\profiles\Minewache-New"
+    $targetScene = "$scenesDir\Minewache-New.json"
 
     if (Test-Path -LiteralPath $targetScene) {
-        Write-Host "[INFO] Minewache scene collection already exists, skipping template deploy" -ForegroundColor Yellow
+        Write-Host "[INFO] Minewache-New scene collection already exists, skipping template deploy" -ForegroundColor Yellow
     } else {
         # Create directories if needed
         New-Item -ItemType Directory -Force -Path $scenesDir | Out-Null
@@ -225,13 +225,13 @@ if (Test-Path -LiteralPath $SceneCollectionFile) {
 
         # Copy scene collection
         Copy-Item -LiteralPath $SceneCollectionFile -Destination $targetScene -Force
-        Write-Host "[OK] Deployed scene collection: Minewache.json -> $scenesDir\" -ForegroundColor Green
+        Write-Host "[OK] Deployed scene collection: Minewache-New.json -> $scenesDir\" -ForegroundColor Green
 
         # Copy profile
-        $profileSrc = Join-Path $TemplateDir "Minewache"
+        $profileSrc = Join-Path $TemplateDir "Minewache-New"
         if (Test-Path -LiteralPath $profileSrc) {
             Copy-Item -LiteralPath $profileSrc -Destination $profileDir -Recurse -Force
-            Write-Host "[OK] Deployed profile: Minewache -> $profileDir\" -ForegroundColor Green
+            Write-Host "[OK] Deployed profile: Minewache-New -> $profileDir\" -ForegroundColor Green
         }
     }
 } else {
@@ -266,8 +266,8 @@ if ($allOk) {
     Write-Host ""
     Write-Host "Next steps:" -ForegroundColor Cyan
     Write-Host "  1. Restart OBS Studio (close completely and reopen)" -ForegroundColor White
-    Write-Host "  2. Scene Collection -> 'Minewache'" -ForegroundColor White
-    Write-Host "  3. Profile -> 'Minewache'" -ForegroundColor White
+    Write-Host "  2. Scene Collection -> 'Minewache-New'" -ForegroundColor White
+    Write-Host "  3. Profile -> 'Minewache-New'" -ForegroundColor White
     Write-Host "  4. LTC Timecode is pre-configured on Track 3" -ForegroundColor White
     Write-Host ""
     Write-Host "  (If no template was deployed, manually add: Sources -> + -> 'LTC Timecode Generator')" -ForegroundColor Gray
