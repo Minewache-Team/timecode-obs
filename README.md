@@ -1,5 +1,7 @@
 # obs-ltc-timecode
 
+> **Note:** This project is no longer actively maintained. Forks are welcome — feel free to pick it up and build on it!
+
 An OBS Studio plugin that generates NTP-synchronized Linear Timecode (LTC) audio, enabling frame-accurate multi-camera synchronization in post-production tools like DaVinci Resolve.
 
 ## What It Does
@@ -235,6 +237,10 @@ ctest --output-on-failure
 This plugin is licensed under the [GNU General Public License v2.0 or later](LICENSE) (SPDX: `GPL-2.0-or-later`).
 
 It uses [libltc](https://github.com/x42/libltc) which is licensed under LGPL-3.0. libltc is dynamically linked as a shared library to comply with LGPL requirements.
+
+## About This Project
+
+This plugin was built by a small team with strong domain knowledge in audio, video, and timecode workflows. AI (Claude Code) was used as a development multiplier — enabling a project of this scope to be completed with limited personnel and time. The [SYSTEM_PROMPT.md](SYSTEM_PROMPT.md) and [PROJECT.md](PROJECT.md) files document how AI was integrated into the development workflow.
 
 ## Credits
 

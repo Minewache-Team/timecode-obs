@@ -22,11 +22,9 @@
 !LICENSE
 !README.md
 !PROJECT.md
-!Setup.md
 !SYSTEM_PROMPT.md
 !install.ps1
 !install.sh
-!SECURITY_AUDIT.md
 
 # Exclude lock files
 *.lock.json
