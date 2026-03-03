@@ -1,68 +1,66 @@
 # obs-ltc-timecode
 
+**An OBS Studio plugin that generates NTP-synchronized Linear Timecode (LTC) audio for frame-accurate multi-camera synchronization.**
+
 > **Note:** This project is no longer actively maintained. Forks are welcome — feel free to pick it up and build on it!
 
-An OBS Studio plugin that generates NTP-synchronized Linear Timecode (LTC) audio, enabling frame-accurate multi-camera synchronization in post-production tools like DaVinci Resolve.
+---
 
-## What It Does
+## Overview
 
-This plugin adds an **"LTC Timecode Generator"** audio source to OBS Studio. It:
+When recording with multiple PCs, syncing footage in post-production is a pain. This plugin solves that by embedding an NTP-synchronized SMPTE timecode as LTC audio into your OBS recordings. Import the clips into DaVinci Resolve (or any NLE that reads LTC) and they sync automatically — no clapper board needed.
 
-1. Syncs your system clock to NTP (network time) for millisecond-accurate timestamps
+### How It Works
+
+1. Syncs your system clock to an NTP server for millisecond-accurate timestamps
 2. Converts the current time to SMPTE timecode (HH:MM:SS:FF)
-3. Encodes the timecode as LTC audio (an industry-standard audio signal)
-4. Outputs the LTC signal on a dedicated audio track in your recording
+3. Encodes the timecode as an LTC audio signal
+4. Outputs it on a dedicated audio track in your recording
 
-When multiple PCs run this plugin, their recordings share the same NTP-derived timecode. Import the recordings into DaVinci Resolve (or any NLE that reads LTC), and they sync automatically — no clapper board needed.
+Run this on every recording PC → all recordings share the same timecode → instant sync in post.
+
+---
 
 ## Features
 
-- **NTP time synchronization** — automatic sync to `pool.ntp.org` with configurable server and interval
-- **SMPTE timecode** — supports 24, 25, 29.97 (drop-frame), 30, 50, and 60 fps
+- **NTP time sync** — automatic sync to `pool.ntp.org` (configurable server & interval)
+- **SMPTE timecode** — 24, 25, 29.97 (drop-frame), 30, 50, 60 fps
 - **Auto framerate detection** — reads your OBS output settings, or set manually
 - **Continuous LTC audio** — gap-free, sample-accurate encoding at 48 kHz mono
-- **Drift-aware resync** — corrects clock drift without causing timecode jumps
+- **Drift-aware resync** — corrects clock drift without timecode jumps
 - **Lightweight** — no external dependencies besides OBS itself
 
-## Supported Platforms
+---
 
-| Platform | Architecture | Minimum Version |
-|----------|-------------|-----------------|
-| Windows  | x64         | Windows 10      |
-| Linux    | x86_64      | Ubuntu 24.04    |
+## Platform Availability
+
+| Platform | Status | Releases |
+|----------|--------|----------|
+| **Windows** (x64) | Fully supported | Available on [Releases](../../releases) page |
+| **Linux** (x86_64) | Builds in CI | Not in releases* |
+
+> \* **Linux:** The plugin builds successfully for Linux (Ubuntu 24.04+) in our GitHub Actions CI pipeline, but Linux binaries are currently **not included in the releases**. Since no one on the team is currently on Linux, we chose not to upload them to avoid confusion with untested artifacts.
+>
+> **If you need the Linux build**, you have two options:
+> 1. **Download from CI** — go to the [Actions](../../actions) tab, select a successful workflow run, and download the Linux artifact
+> 2. **Open an issue** — as soon as the first person requests it, we'll start including Linux binaries in the releases
+
+---
 
 ## Installation
 
 ### Windows
 
-**Option A: Install script (recommended)**
+**Option A: Installer (recommended)**
 
-After building (or extracting a release), run the install script from the project root:
-
-```powershell
-.\install.ps1
-```
-
-The script automatically:
-- Installs to the correct OBS plugin directory (`C:\ProgramData\obs-studio\plugins\`)
-- Creates the folder structure if needed
-- Removes any old installs from the wrong path (AppData)
-- Verifies the installation
-
-> **Note:** You may need to run PowerShell as Administrator since `C:\ProgramData` requires write permissions.
-
-To uninstall: `.\install.ps1 -Uninstall`
+1. Download the latest installer (`.exe`) from the [Releases](../../releases) page
+2. Run the installer — it handles everything automatically
+3. Restart OBS Studio
 
 **Option B: Manual install**
 
-1. Download the latest release `.zip` from the [Releases](../../releases) page
-2. Extract the archive
-3. Copy the contents to the OBS **ProgramData** plugins folder:
-
-   > **IMPORTANT:** The correct path is `C:\ProgramData\obs-studio\plugins\` — **NOT** `%APPDATA%\obs-studio\plugins\`!
-   > `%APPDATA%` is only for OBS settings/config, OBS does not load plugins from there.
-
-   The folder structure should look like:
+1. Download the latest `.zip` from the [Releases](../../releases) page
+2. Extract and copy the contents to:
    ```
    C:\ProgramData\obs-studio\plugins\obs-ltc-timecode\
    ├── bin\
@@ -72,115 +70,114 @@ To uninstall: `.\install.ps1 -Uninstall`
        └── locale\
            └── en-US.ini
    ```
-4. Restart OBS Studio
+3. Restart OBS Studio
+
+> **Important:** The correct path is `C:\ProgramData\obs-studio\plugins\` — **not** `%APPDATA%\obs-studio\plugins\`. OBS does not load plugins from AppData.
 
 ### Linux
 
-**Option A: Install script (recommended)**
-
-After building, run the install script from the project root:
-
+**Option A: Install script**
 ```bash
-chmod +x install.sh
-./install.sh
+chmod +x install.sh && ./install.sh
 ```
 
-To uninstall: `./install.sh --uninstall`
-
-**Option B: .deb package (Ubuntu/Debian)**
+**Option B: .deb package**
 ```bash
 sudo dpkg -i obs-ltc-timecode_*.deb
 ```
 
 **Option C: Manual install**
 ```bash
-tar xzf obs-ltc-timecode_*.tar.gz
 mkdir -p ~/.config/obs-studio/plugins/obs-ltc-timecode/bin/64bit
 mkdir -p ~/.config/obs-studio/plugins/obs-ltc-timecode/data
 cp obs-ltc-timecode.so ~/.config/obs-studio/plugins/obs-ltc-timecode/bin/64bit/
 cp -r data/* ~/.config/obs-studio/plugins/obs-ltc-timecode/data/
 ```
 
-Restart OBS Studio after installation.
+To uninstall: `./install.sh --uninstall`
+
+---
 
 ## Usage
 
 ### Basic Setup
 
-1. In OBS, click **Sources** → **+** → **LTC Timecode Generator**
+1. In OBS, go to **Sources** → **+** → **LTC Timecode Generator**
 2. The plugin appears in the Audio Mixer with LTC output
-3. In **Settings** → **Output** → **Recording**, assign the LTC source to a **separate audio track** (e.g., Track 4) so it doesn't mix with your main audio
+3. In **Settings** → **Output** → **Recording**, assign the LTC source to a **separate audio track** (e.g., Track 4)
 
-### Recording for Multi-Camera Sync
+### Multi-Camera Sync
 
 1. Install the plugin on each recording PC
-2. Ensure all PCs have internet access (for NTP sync)
-3. Add the LTC source on each PC, assigned to the same track number
-4. Use the same framerate setting on all PCs (or leave on "Auto" if OBS settings match)
-5. Start recordings — they don't need to start at the exact same time
-6. Import recordings into DaVinci Resolve and use the LTC audio track for timecode-based synchronization
+2. Ensure all PCs have internet access (for NTP)
+3. Add the LTC source on each, assigned to the same track number
+4. Use the same framerate on all PCs (or leave on "Auto")
+5. Start recordings — they don't need to start simultaneously
+6. Import into DaVinci Resolve and sync via the LTC audio track
 
 ### Configuration
 
-Open the source properties to configure:
-
 | Setting | Description | Default |
 |---------|-------------|---------|
-| **Framerate** | Timecode framerate. "Auto" reads from OBS output settings. | Auto (from OBS) |
-| **NTP Server** | NTP server address for time synchronization. | `pool.ntp.org` |
-| **Sync Interval** | How often the plugin re-syncs with the NTP server. | 5 min |
+| **Framerate** | Timecode framerate. "Auto" reads from OBS. | Auto |
+| **NTP Server** | Server address for time sync. | `pool.ntp.org` |
+| **Sync Interval** | Re-sync frequency. | 5 min |
 
-The properties panel also shows:
-- **NTP Status** — whether synchronization was successful and the current offset
-- **Current Timecode** — the live SMPTE timecode being encoded
+The properties panel also shows the **NTP sync status** and the **live SMPTE timecode** being generated.
+
+---
 
 ## Troubleshooting
 
-### Plugin doesn't appear in OBS
+<details>
+<summary><strong>Plugin doesn't appear in OBS</strong></summary>
 
-**Step-by-step checklist:**
-
-1. **Check you're using the RIGHT folder** — this is the #1 mistake:
+1. **Check the install path** — most common mistake:
    - **Correct:** `C:\ProgramData\obs-studio\plugins\obs-ltc-timecode\`
-   - **WRONG:** `%APPDATA%\obs-studio\plugins\` — OBS does NOT load plugins from AppData!
-   - `%APPDATA%` (= `C:\Users\<name>\AppData\Roaming`) is only for OBS settings/config
-   - `%ProgramData%` (= `C:\ProgramData`) is where OBS looks for third-party plugins
+   - **Wrong:** `%APPDATA%\obs-studio\plugins\` (OBS doesn't load plugins from here)
 
-2. **Check the folder structure** inside the plugin directory:
-   - Verify `bin\64bit\obs-ltc-timecode.dll` exists
-   - Verify `data\locale\en-US.ini` exists
+2. **Verify the folder structure** — `bin\64bit\obs-ltc-timecode.dll` and `data\locale\en-US.ini` must exist
 
-3. **Check the OBS log** — `Help` → `Log Files` → `View Current Log`:
-   - Search for `obs-ltc-timecode` in the log
-   - If you see `"loading plugin (version ...)"` → plugin loads, issue is elsewhere
-   - If you see no mention of the plugin → OBS didn't find the DLL (wrong path)
-   - If you see `"error loading module"` → DLL dependency issue
+3. **Check the OBS log** (`Help` → `Log Files` → `View Current Log`):
+   - `"loading plugin"` → plugin found, issue is elsewhere
+   - No mention → wrong install path
+   - `"error loading module"` → DLL dependency issue
 
-4. **Verify 64-bit OBS** — this plugin only works with 64-bit OBS Studio
+4. **Verify 64-bit OBS** — 32-bit is not supported
 
-5. **Reinstall with the install script** — uses the correct path automatically:
-   ```powershell
-   .\install.ps1
-   ```
+5. **Re-run the installer** from the [Releases](../../releases) page
 
-### NTP sync fails / "Not synced — using local clock"
+</details>
 
-- **Firewall**: NTP uses **UDP port 123**. Corporate networks and some firewalls block this. Ask your network admin or use a VPN.
-- **Custom NTP server**: If `pool.ntp.org` is blocked, try your organization's internal NTP server in the plugin settings.
-- **Local clock fallback**: The plugin will still work using your local system clock, but multi-PC sync may drift without NTP.
+<details>
+<summary><strong>NTP sync fails / "Not synced — using local clock"</strong></summary>
 
-### Timecode drift in long recordings
+- **Firewall:** NTP uses UDP port 123. Corporate networks may block this.
+- **Custom server:** Try your organization's internal NTP server.
+- **Fallback:** The plugin still works with your local clock, but multi-PC sync may drift.
 
-- Ensure NTP sync is working (check the status in plugin properties)
-- Use a shorter sync interval (1 min) for better accuracy
-- The plugin's drift-aware resync corrects up to 2 frames of drift automatically
+</details>
 
-### DaVinci Resolve doesn't read the timecode
+<details>
+<summary><strong>Timecode drift in long recordings</strong></summary>
 
-- Record in MKV or MOV format (both support multiple audio tracks)
-- Make sure the LTC audio is on a separate track, not mixed with other audio
-- In DaVinci Resolve's Media Pool, right-click the clip → check timecode track settings
-- Verify the audio track is not silent (check the Audio Mixer level in OBS during recording)
+- Verify NTP sync is active (check status in plugin properties)
+- Use a shorter sync interval (1 min)
+- The drift-aware resync corrects up to 2 frames automatically
+
+</details>
+
+<details>
+<summary><strong>DaVinci Resolve doesn't read the timecode</strong></summary>
+
+- Record in MKV or MOV (both support multiple audio tracks)
+- Ensure LTC audio is on a separate track, not mixed with other audio
+- In Resolve's Media Pool, right-click the clip and check timecode track settings
+- Verify the track isn't silent (check Audio Mixer levels in OBS)
+
+</details>
+
+---
 
 ## Building from Source
 
@@ -193,10 +190,9 @@ The properties panel also shows:
 | GCC / build tools | — | `sudo apt install build-essential` |
 | Ninja | Via VS Installer | `sudo apt install ninja-build` |
 
-### Build Steps
+### Build
 
 ```bash
-# Clone with submodules
 git clone --recursive https://github.com/Minewache-Team/timecode-obs.git
 cd timecode-obs
 ```
@@ -215,35 +211,32 @@ cmake --build --preset ubuntu-x86_64
 cd build_x86_64 && ctest --output-on-failure
 ```
 
-### Running Tests
-
-The project includes unit tests for timecode generation, NTP offset calculation, and LTC encode/decode roundtrips:
-
-```bash
-cd build_x86_64  # or build_x64 on Windows
-ctest --output-on-failure
-```
+---
 
 ## Technical Details
 
-- **Audio format**: 48 kHz, mono, float32, -12 dBFS amplitude
-- **LTC encoding**: Uses [libltc](https://github.com/x42/libltc) (LGPL-3.0)
-- **NTP protocol**: SNTPv4 (RFC 4330), no admin privileges required
-- **Thread model**: Dedicated NTP sync thread + OBS video tick for audio generation
-- **Drift correction**: Checks every ~30 seconds, hard-resyncs only if drift exceeds 2 frames
+| Property | Value |
+|----------|-------|
+| Audio format | 48 kHz, mono, float32, -12 dBFS |
+| LTC encoding | [libltc](https://github.com/x42/libltc) (LGPL-3.0) |
+| NTP protocol | SNTPv4 (RFC 4330), no admin privileges required |
+| Thread model | Dedicated NTP sync thread + OBS video tick |
+| Drift correction | Checks every ~30s, hard-resyncs if drift > 2 frames |
+
+---
 
 ## License
 
-This plugin is licensed under the [GNU General Public License v2.0 or later](LICENSE) (SPDX: `GPL-2.0-or-later`).
+Licensed under the [GNU General Public License v2.0 or later](LICENSE) (GPL-2.0-or-later).
 
-It uses [libltc](https://github.com/x42/libltc) which is licensed under LGPL-3.0. libltc is dynamically linked as a shared library to comply with LGPL requirements.
+Uses [libltc](https://github.com/x42/libltc) (LGPL-3.0), dynamically linked to comply with LGPL requirements.
 
-## About This Project
+## About
 
-This plugin was built by a small team with strong domain knowledge in audio, video, and timecode workflows. AI (Claude Code) was used as a development multiplier — enabling a project of this scope to be completed with limited personnel and time. The [SYSTEM_PROMPT.md](SYSTEM_PROMPT.md) and [PROJECT.md](PROJECT.md) files document how AI was integrated into the development workflow.
+This plugin was built by a small team with domain knowledge in audio, video, and timecode workflows. AI (Claude Code) was used as a development multiplier. See [SYSTEM_PROMPT.md](SYSTEM_PROMPT.md) and [PROJECT.md](PROJECT.md) for details on the AI-assisted workflow.
 
 ## Credits
 
-- **Author**: [Ferdmusic](https://github.com/Ferdmusic)
-- **LTC encoding**: [libltc](https://github.com/x42/libltc) by Robin Gareus
-- **Plugin template**: [obs-plugintemplate](https://github.com/obsproject/obs-plugintemplate) by OBS Project
+- **Author:** [Ferdmusic](https://github.com/Ferdmusic)
+- **LTC encoding:** [libltc](https://github.com/x42/libltc) by Robin Gareus
+- **Plugin template:** [obs-plugintemplate](https://github.com/obsproject/obs-plugintemplate) by OBS Project
