@@ -30,20 +30,20 @@ If you run this on all your recording PCs, every file will share the exact same 
 
 | Platform | Status | Releases |
 | --- | --- | --- |
-| **Windows** (x64) | Supported | Available on the [Releases](https://www.google.com/search?q=../../releases) page |
-| **Linux** (x86_64) | Builds in CI | Not in releases |
+| **Windows** (x64) | Supported | Available on the [Releases](https://github.com/Minewache-Team/timecode-obs/releases) page |
+| **Linux** (x86_64) | Builds in CI | Available on request |
 
-Linux binaries (Ubuntu 24.04+) build successfully in GitHub Actions but aren't included in the official releases because the team doesn't use Linux and hasn't tested them locally. If you need a Linux build, you can download the artifact from the [Actions](https://www.google.com/search?q=../../actions) tab.
+Linux binaries (Ubuntu 24.04+) build successfully in GitHub Actions. Once someone opens an issue requesting a Linux binary, we'll add it to the [Releases](https://github.com/Minewache-Team/timecode-obs/releases). Until then, you can download the artifact from the latest successful build on the [Actions](https://github.com/Minewache-Team/timecode-obs/actions) tab.
 
 ## Installation
 
 ### Windows
 
 **Installer (recommended)**
-Download the latest `.exe` from the [Releases](https://www.google.com/search?q=../../releases) page, run it, and restart OBS Studio.
+Download the latest `.exe` from the [Releases](https://github.com/Minewache-Team/timecode-obs/releases) page, run it, and restart OBS Studio.
 
 **Manual install**
-Download the `.zip` from the [Releases](https://www.google.com/search?q=../../releases) page and extract it to:
+Download the `.zip` from the [Releases](https://github.com/Minewache-Team/timecode-obs/releases) page and extract it to:
 
 ```text
 C:\ProgramData\obs-studio\plugins\obs-ltc-timecode\
