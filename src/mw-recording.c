@@ -216,18 +216,18 @@ static bool show_consent_dialog(const char *server_url)
 	snprintf(msg, sizeof(msg),
 		 "MW Aufnahme - Datenschutz (DSGVO)\n\n"
 		 "Durch die MW-Aufnahme werden folgende Daten an den "
-		 "Server uebermittelt:\n\n"
+		 "Server übermittelt:\n\n"
 		 "  - Dein Anzeigename\n"
 		 "  - Deine Kamera-ID (A-H)\n"
 		 "  - Aufnahmestatus (online/offline)\n"
 		 "  - Zeitstempel (Start, Stop, Heartbeat)\n\n"
 		 "NUR der Regisseur kann diese Daten einsehen.\n"
 		 "Es werden KEINE Audio-, Video- oder Bilddaten "
-		 "uebertragen.\n\n"
-		 "Sessions werden nach 30 Tagen automatisch geloescht.\n"
+		 "übertragen.\n\n"
+		 "Sessions werden nach 30 Tagen automatisch gelöscht.\n"
 		 "Du kannst deine Einwilligung jederzeit widerrufen.\n\n"
 		 "Server: %s\n"
-		 "Datenschutzerklaerung: %s/datenschutz.php\n\n"
+		 "Datenschutzerklärung: %s/datenschutz.php\n\n"
 		 "Bist du damit einverstanden?",
 		 server_url, server_url);
 
@@ -395,7 +395,7 @@ static void on_frontend_event(enum obs_frontend_event event, void *data)
 				NULL,
 				"Achtung: Die Aufnahme wurde pausiert!\n\n"
 				"Das Pausieren der Aufnahme kann den "
-				"Timecode-Sync zerstoeren.\n\n"
+				"Timecode-Sync zerstören.\n\n"
 				"Bitte die Aufnahme nicht pausieren, "
 				"sondern stoppen und neu starten.",
 				"MW Aufnahme - Warnung",

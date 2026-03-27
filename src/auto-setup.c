@@ -95,10 +95,10 @@ static bool show_switch_dialog(void)
 		NULL,
 		"Das Minewache-New Template mit vorkonfiguriertem "
 		"LTC Timecode (Track 3) wurde erkannt.\n\n"
-		"Moechtest du zur Minewache-New Scene Collection wechseln?\n\n"
+		"Möchtest du zur Minewache-New Scene Collection wechseln?\n\n"
 		"Track 1: Stimmen Audio\n"
 		"Track 2: Ingame Audio\n"
-		"Track 3: LTC Timecode (fuer DaVinci Resolve Sync)",
+		"Track 3: LTC Timecode (für DaVinci Resolve Sync)",
 		"OBS LTC Timecode - Setup",
 		MB_YESNO | MB_ICONQUESTION | MB_SYSTEMMODAL);
 	return result == IDYES;
@@ -115,8 +115,8 @@ static bool show_upgrade_dialog(void)
 #ifdef _WIN32
 	int result = MessageBoxA(
 		NULL,
-		"Ein aelteres Minewache-Template wurde erkannt.\n\n"
-		"Moechtest du auf das neue Minewache-New Template "
+		"Ein älteres Minewache-Template wurde erkannt.\n\n"
+		"Möchtest du auf das neue Minewache-New Template "
 		"upgraden?\n\n"
 		"Das neue Template hat LTC Timecode vorkonfiguriert "
 		"auf Track 3.",

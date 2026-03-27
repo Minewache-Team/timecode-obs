@@ -5,6 +5,7 @@ on:
     branches:
       - master
       - main
+      - Minewache
       - 'release/**'
     tags:
       - '*'
@@ -13,7 +14,7 @@ permissions:
 jobs:
   check-format:
     name: Check Formatting 🔍
-    if: github.ref_name == 'master' || github.ref_name == 'main'
+    if: github.ref_name == 'master' || github.ref_name == 'main' || github.ref_name == 'Minewache'
     uses: ./.github/workflows/check-format.yaml
     permissions:
       contents: read
@@ -34,6 +35,10 @@ jobs:
       run:
         shell: bash
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Check Release Tag ☑️
         id: check
         run: |
@@ -54,6 +59,13 @@ jobs:
               ;;
             *) echo 'validTag=false' >> $GITHUB_OUTPUT ;;
           esac
+
+          # Check if the tag points to a commit on the Minewache branch
+          if git branch -r --contains "${GITHUB_SHA}" 2>/dev/null | grep -q 'origin/Minewache'; then
+            echo 'minewache=true' >> $GITHUB_OUTPUT
+          else
+            echo 'minewache=false' >> $GITHUB_OUTPUT
+          fi
 
       - name: Download Build Artifacts 📥
         uses: actions/download-artifact@v4
@@ -108,7 +120,7 @@ jobs:
           draft: false
           prerelease: ${{ fromJSON(steps.check.outputs.prerelease) }}
           tag_name: ${{ steps.check.outputs.version }}
-          name: ${{ needs.build-project.outputs.pluginName }} ${{ steps.check.outputs.version }}
+          name: ${{ needs.build-project.outputs.pluginName }} ${{ steps.check.outputs.version }}${{ steps.check.outputs.minewache == 'true' && ' - Minewache Specific Version' || '' }}
           body_path: ${{ github.workspace }}/CHECKSUMS.txt
           files: |
             ${{ github.workspace }}/*.exe
