@@ -81,8 +81,7 @@ static size_t discard_write(char *ptr, size_t size, size_t nmemb, void *data)
  * url_suffix: e.g. "?action=start"
  * json_body: JSON string to send as POST body
  */
-static bool mw_http_post(const char *base_url, const char *url_suffix,
-			  const char *api_key, const char *json_body)
+static bool mw_http_post(const char *base_url, const char *url_suffix, const char *api_key, const char *json_body)
 {
 	if (!base_url || !base_url[0])
 		return false;
@@ -117,8 +116,7 @@ static bool mw_http_post(const char *base_url, const char *url_suffix,
 	curl_easy_cleanup(curl);
 
 	if (res != CURLE_OK) {
-		obs_log(LOG_WARNING, "MW HTTP POST failed: %s (url: %s)",
-			curl_easy_strerror(res), url);
+		obs_log(LOG_WARNING, "MW HTTP POST failed: %s (url: %s)", curl_easy_strerror(res), url);
 		return false;
 	}
 
@@ -147,14 +145,12 @@ static void *heartbeat_thread_func(void *data)
 
 		if (active && server[0] && name[0]) {
 			char body[256];
-			snprintf(body, sizeof(body),
-				 "{\"name\":\"%s\"}", name);
+			snprintf(body, sizeof(body), "{\"name\":\"%s\"}", name);
 			mw_http_post(server, "?action=heartbeat", key, body);
 			obs_log(LOG_DEBUG, "MW heartbeat sent for '%s'", name);
 		}
 
-		if (os_event_timedwait(mw->stop_event,
-				       MW_HEARTBEAT_INTERVAL_SEC * 1000) == 0)
+		if (os_event_timedwait(mw->stop_event, MW_HEARTBEAT_INTERVAL_SEC * 1000) == 0)
 			return NULL;
 	}
 
@@ -169,8 +165,7 @@ static void start_heartbeat_thread(mw_recording_t *mw)
 	if (os_event_init(&mw->stop_event, OS_EVENT_TYPE_MANUAL) != 0)
 		return;
 
-	if (pthread_create(&mw->heartbeat_thread, NULL,
-			   heartbeat_thread_func, mw) == 0) {
+	if (pthread_create(&mw->heartbeat_thread, NULL, heartbeat_thread_func, mw) == 0) {
 		mw->thread_created = true;
 	} else {
 		os_event_destroy(mw->stop_event);
@@ -231,9 +226,8 @@ static bool show_consent_dialog(const char *server_url)
 		 "Bist du damit einverstanden?",
 		 server_url, server_url);
 
-	int result = MessageBoxA(NULL, msg,
-				 "MW Aufnahme - DSGVO Einwilligung",
-				 MB_YESNO | MB_ICONQUESTION | MB_SYSTEMMODAL);
+	int result =
+		MessageBoxA(NULL, msg, "MW Aufnahme - DSGVO Einwilligung", MB_YESNO | MB_ICONQUESTION | MB_SYSTEMMODAL);
 	return result == IDYES;
 }
 #endif
@@ -265,20 +259,17 @@ static bool ensure_consent(mw_recording_t *mw)
 
 		/* Log consent on server */
 		char body[512];
-		snprintf(body, sizeof(body),
-			 "{\"name\":\"%s\",\"consent\":true}", name);
+		snprintf(body, sizeof(body), "{\"name\":\"%s\",\"consent\":true}", name);
 		mw_http_post(server, "?action=consent", key, body);
 
-		obs_log(LOG_INFO, "MW recording: user '%s' gave consent",
-			name);
+		obs_log(LOG_INFO, "MW recording: user '%s' gave consent", name);
 		return true;
 	}
 
 	obs_log(LOG_INFO, "MW recording: user declined consent");
 	return false;
 #else
-	obs_log(LOG_WARNING,
-		"MW recording consent dialog not available on this platform");
+	obs_log(LOG_WARNING, "MW recording consent dialog not available on this platform");
 	return false;
 #endif
 }
@@ -300,19 +291,15 @@ static void mw_send_start(mw_recording_t *mw)
 	pthread_mutex_unlock(&mw->mutex);
 
 	if (!server[0] || !name[0]) {
-		obs_log(LOG_WARNING,
-			"MW recording: server URL or name not configured");
+		obs_log(LOG_WARNING, "MW recording: server URL or name not configured");
 		return;
 	}
 
 	char body[512];
-	snprintf(body, sizeof(body),
-		 "{\"name\":\"%s\",\"camera_id\":\"%c\"}",
-		 name, 'A' + cam);
+	snprintf(body, sizeof(body), "{\"name\":\"%s\",\"camera_id\":\"%c\"}", name, 'A' + cam);
 	mw_http_post(server, "?action=start", key, body);
 
-	obs_log(LOG_INFO, "MW recording started: '%s' camera %c",
-		name, 'A' + cam);
+	obs_log(LOG_INFO, "MW recording started: '%s' camera %c", name, 'A' + cam);
 }
 
 static void mw_send_stop(mw_recording_t *mw)
@@ -333,13 +320,10 @@ static void mw_send_stop(mw_recording_t *mw)
 		return;
 
 	char body[512];
-	snprintf(body, sizeof(body),
-		 "{\"name\":\"%s\",\"camera_id\":\"%c\"}",
-		 name, 'A' + cam);
+	snprintf(body, sizeof(body), "{\"name\":\"%s\",\"camera_id\":\"%c\"}", name, 'A' + cam);
 	mw_http_post(server, "?action=stop", key, body);
 
-	obs_log(LOG_INFO, "MW recording stopped: '%s' camera %c",
-		name, 'A' + cam);
+	obs_log(LOG_INFO, "MW recording stopped: '%s' camera %c", name, 'A' + cam);
 }
 
 /* ---- Frontend event callback ---- */
@@ -357,8 +341,7 @@ static void on_frontend_event(enum obs_frontend_event event, void *data)
 		if (!ensure_consent(mw)) {
 			/* User declined consent — we cannot block the
 			 * recording from here, but we skip sending data. */
-			obs_log(LOG_INFO,
-				"MW recording: skipping (no consent)");
+			obs_log(LOG_INFO, "MW recording: skipping (no consent)");
 			return;
 		}
 	}
@@ -391,15 +374,13 @@ static void on_frontend_event(enum obs_frontend_event event, void *data)
 		/* Warn user that pausing breaks timecode sync */
 #ifdef _WIN32
 		if (mw->enabled && mw->recording_active) {
-			MessageBoxA(
-				NULL,
-				"Achtung: Die Aufnahme wurde pausiert!\n\n"
-				"Das Pausieren der Aufnahme kann den "
-				"Timecode-Sync zerstören.\n\n"
-				"Bitte die Aufnahme nicht pausieren, "
-				"sondern stoppen und neu starten.",
-				"MW Aufnahme - Warnung",
-				MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL);
+			MessageBoxA(NULL,
+				    "Achtung: Die Aufnahme wurde pausiert!\n\n"
+				    "Das Pausieren der Aufnahme kann den "
+				    "Timecode-Sync zerstören.\n\n"
+				    "Bitte die Aufnahme nicht pausieren, "
+				    "sondern stoppen und neu starten.",
+				    "MW Aufnahme - Warnung", MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL);
 		}
 #endif
 	}
@@ -442,9 +423,8 @@ void mw_recording_destroy(mw_recording_t *mw)
 	obs_log(LOG_INFO, "MW recording context destroyed");
 }
 
-void mw_recording_update(mw_recording_t *mw, const char *server_url,
-			  const char *user_name, const char *api_key,
-			  int camera_id, bool enabled)
+void mw_recording_update(mw_recording_t *mw, const char *server_url, const char *user_name, const char *api_key,
+			 int camera_id, bool enabled)
 {
 	if (!mw)
 		return;
@@ -452,11 +432,9 @@ void mw_recording_update(mw_recording_t *mw, const char *server_url,
 	pthread_mutex_lock(&mw->mutex);
 
 	if (server_url)
-		snprintf(mw->server_url, sizeof(mw->server_url), "%s",
-			 server_url);
+		snprintf(mw->server_url, sizeof(mw->server_url), "%s", server_url);
 	if (user_name)
-		snprintf(mw->user_name, sizeof(mw->user_name), "%s",
-			 user_name);
+		snprintf(mw->user_name, sizeof(mw->user_name), "%s", user_name);
 	if (api_key)
 		snprintf(mw->api_key, sizeof(mw->api_key), "%s", api_key);
 	mw->camera_id = camera_id;
