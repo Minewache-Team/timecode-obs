@@ -352,15 +352,25 @@ static LRESULT CALLBACK consent_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LPA
 		HFONT hTitleFont = create_font(18, true);
 		HFONT hSmallFont = create_font(12, false);
 
-		int y = 20, x = 24, w = 432;
+		/* Measure actual line height for DPI-aware layout */
+		HDC hdc = GetDC(hwnd);
+		HFONT oldFont = (HFONT)SelectObject(hdc, hFont);
+		TEXTMETRICW tm;
+		GetTextMetricsW(hdc, &tm);
+		int lh = tm.tmHeight + tm.tmExternalLeading; /* line height */
+		SelectObject(hdc, oldFont);
+		ReleaseDC(hwnd, hdc);
+
+		int y = 15, x = 24, w = 432;
 
 		/* Title */
 		HWND title = CreateWindowW(L"STATIC", L"MW Aufnahme \u2013 Datenschutz (DSGVO)",
-					   WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, 28, hwnd, NULL, NULL, NULL);
+					   WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, lh + 8, hwnd, NULL, NULL, NULL);
 		SendMessageW(title, WM_SETFONT, (WPARAM)hTitleFont, TRUE);
-		y += 40;
+		y += lh + 18;
 
-		/* Info text block 1: what data is transmitted */
+		/* Info text: what data is transmitted (7 lines) */
+		int h1 = lh * 7 + 4;
 		HWND info1 = CreateWindowW(L"STATIC",
 					   L"Durch die MW-Aufnahme werden folgende Daten\r\n"
 					   L"an den Server \u00FCbermittelt:\r\n"
@@ -369,53 +379,55 @@ static LRESULT CALLBACK consent_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LPA
 					   L"  \u2022  Deine Kamera-ID (A\u2013H)\r\n"
 					   L"  \u2022  Aufnahmestatus (online/offline)\r\n"
 					   L"  \u2022  Zeitstempel (Start, Stop, Heartbeat)",
-					   WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, 120, hwnd, NULL, NULL, NULL);
+					   WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, h1, hwnd, NULL, NULL, NULL);
 		SendMessageW(info1, WM_SETFONT, (WPARAM)hFont, TRUE);
-		y += 128;
+		y += h1 + 6;
 
-		/* Info text block 2: privacy assurances */
+		/* Privacy assurances (3 lines) */
+		int h2 = lh * 3 + 4;
 		HWND info2 = CreateWindowW(L"STATIC",
 					   L"NUR der Regisseur kann diese Daten einsehen.\r\n"
 					   L"Es werden KEINE Audio-, Video- oder Bilddaten\r\n"
 					   L"\u00FCbertragen.",
-					   WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, 52, hwnd, NULL, NULL, NULL);
+					   WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, h2, hwnd, NULL, NULL, NULL);
 		SendMessageW(info2, WM_SETFONT, (WPARAM)hFont, TRUE);
-		y += 58;
+		y += h2 + 6;
 
-		/* Info text block 3: retention & revocation */
+		/* Retention & revocation (3 lines) */
+		int h3 = lh * 3 + 4;
 		HWND info3 = CreateWindowW(L"STATIC",
 					   L"Sessions werden nach 30 Tagen automatisch\r\n"
 					   L"gel\u00F6scht. Du kannst deine Einwilligung\r\n"
 					   L"jederzeit widerrufen.",
-					   WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, 52, hwnd, NULL, NULL, NULL);
+					   WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, h3, hwnd, NULL, NULL, NULL);
 		SendMessageW(info3, WM_SETFONT, (WPARAM)hFont, TRUE);
-		y += 58;
+		y += h3 + 6;
 
-		/* Server info (static text, not link) */
+		/* Server info */
 		wchar_t server_buf[600];
 		_snwprintf(server_buf, 600, L"Server: %ls", g_consent_server_w);
 		HWND serverLabel = CreateWindowW(L"STATIC", server_buf,
-						  WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, 18, hwnd, NULL, NULL, NULL);
+						  WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, lh + 2, hwnd, NULL, NULL, NULL);
 		SendMessageW(serverLabel, WM_SETFONT, (WPARAM)hSmallFont, TRUE);
-		y += 24;
+		y += lh + 10;
 
 		/* Separator line */
 		CreateWindowW(L"STATIC", NULL, WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ, x, y, w, 2, hwnd, NULL, NULL,
 			      NULL);
-		y += 14;
+		y += 10;
 
 		/* Datenschutzerklaerung button */
 		HWND btnDsgvo = CreateWindowW(L"BUTTON", L"Datenschutzerkl\u00E4rung \u00F6ffnen",
 					       WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, x, y, 250, 32, hwnd,
 					       (HMENU)(INT_PTR)IDC_CONSENT_DSGVO, NULL, NULL);
 		SendMessageW(btnDsgvo, WM_SETFONT, (WPARAM)hFont, TRUE);
-		y += 46;
+		y += 42;
 
 		/* Question */
 		HWND q = CreateWindowW(L"STATIC", L"Bist du damit einverstanden?",
-				       WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, 24, hwnd, NULL, NULL, NULL);
+				       WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, lh + 4, hwnd, NULL, NULL, NULL);
 		SendMessageW(q, WM_SETFONT, (WPARAM)hFontBold, TRUE);
-		y += 34;
+		y += lh + 14;
 
 		/* Buttons */
 		HWND btnYes = CreateWindowW(L"BUTTON", L"Ja, einverstanden",
@@ -426,6 +438,12 @@ static LRESULT CALLBACK consent_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LPA
 		HWND btnNo = CreateWindowW(L"BUTTON", L"Nein, ablehnen", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
 					   x + 180, y, 160, 38, hwnd, (HMENU)(INT_PTR)IDC_CONSENT_NO, NULL, NULL);
 		SendMessageW(btnNo, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+		/* Resize window to fit all content */
+		y += 52; /* button height + bottom padding */
+		RECT rc = {0, 0, 500, y};
+		AdjustWindowRectEx(&rc, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, FALSE, WS_EX_DLGMODALFRAME);
+		SetWindowPos(hwnd, NULL, 0, 0, rc.right - rc.left, rc.bottom - rc.top, SWP_NOMOVE | SWP_NOZORDER);
 
 		return 0;
 	}
@@ -493,10 +511,11 @@ static bool show_consent_dialog(const char *server_url)
 		class_registered = true;
 	}
 
+	/* Initial size is a placeholder; WM_CREATE resizes to fit content */
 	HWND hwnd = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST, L"MWConsentDialog",
 				    L"MW Aufnahme \u2013 DSGVO Einwilligung",
 				    WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 500,
-				    580, NULL, NULL, GetModuleHandleW(NULL), NULL);
+				    600, NULL, NULL, GetModuleHandleW(NULL), NULL);
 
 	ShowWindow(hwnd, SW_SHOW);
 	UpdateWindow(hwnd);
