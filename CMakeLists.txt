@@ -65,6 +65,8 @@ target_sources(
           src/http-time-client.h
           src/metadata-writer.c
           src/metadata-writer.h
+          src/mw-recording.c
+          src/mw-recording.h
 )
 
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
