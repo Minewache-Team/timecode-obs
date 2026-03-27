@@ -33,7 +33,6 @@
 #include "ltc-encoder-wrapper.h"
 #ifdef ENABLE_FRONTEND_API
 #include "metadata-writer.h"
-#include "mw-recording.h"
 #include <obs-frontend-api.h>
 #include <util/config-file.h>
 #endif
@@ -125,8 +124,6 @@ struct ltc_source_context {
 	/* Metadata sidecar writer */
 	metadata_writer_t *metadata;
 
-	/* MW recording status reporting */
-	mw_recording_t *mw_recording;
 #endif
 };
 
@@ -589,17 +586,6 @@ static void *ltc_source_create(obs_data_t *settings, obs_source_t *source)
 
 #ifdef ENABLE_FRONTEND_API
 	ctx->metadata = metadata_writer_create();
-	ctx->mw_recording = mw_recording_create();
-
-	/* Load MW recording settings */
-	{
-		const char *mw_url = obs_data_get_string(settings, S_MW_SERVER_URL);
-		const char *mw_name = obs_data_get_string(settings, S_MW_USER_NAME);
-		const char *mw_key = obs_data_get_string(settings, S_MW_API_KEY);
-		bool mw_on = obs_data_get_bool(settings, S_MW_ENABLED);
-		mw_recording_update(ctx->mw_recording, mw_url, mw_name,
-				    mw_key, ctx->camera_id, mw_on);
-	}
 #endif
 
 	obs_log(LOG_INFO,
@@ -619,7 +605,6 @@ static void ltc_source_destroy(void *data)
 	stop_ntp_thread(ctx);
 
 #ifdef ENABLE_FRONTEND_API
-	mw_recording_destroy(ctx->mw_recording);
 	metadata_writer_destroy(ctx->metadata);
 #endif
 
@@ -696,16 +681,6 @@ static void ltc_source_update(void *data, obs_data_t *settings)
 	}
 
 #ifdef ENABLE_FRONTEND_API
-	/* Update MW recording settings */
-	{
-		const char *mw_url = obs_data_get_string(settings, S_MW_SERVER_URL);
-		const char *mw_name = obs_data_get_string(settings, S_MW_USER_NAME);
-		const char *mw_key = obs_data_get_string(settings, S_MW_API_KEY);
-		bool mw_on = obs_data_get_bool(settings, S_MW_ENABLED);
-		mw_recording_update(ctx->mw_recording, mw_url, mw_name,
-				    mw_key, ctx->camera_id, mw_on);
-	}
-
 	/* Update metadata writer with current settings */
 	{
 		const char *sync_str = "local";
@@ -816,21 +791,6 @@ static obs_properties_t *ltc_source_get_properties(void *data)
 	}
 #endif
 
-#ifdef ENABLE_FRONTEND_API
-	/* ---- MW Aufnahme Section ---- */
-	obs_properties_add_bool(props, S_MW_ENABLED,
-				obs_module_text("MWEnabled"));
-	obs_properties_add_text(props, S_MW_SERVER_URL,
-				obs_module_text("MWServerURL"),
-				OBS_TEXT_DEFAULT);
-	obs_properties_add_text(props, S_MW_USER_NAME,
-				obs_module_text("MWUserName"),
-				OBS_TEXT_DEFAULT);
-	obs_properties_add_text(props, S_MW_API_KEY,
-				obs_module_text("MWApiKey"),
-				OBS_TEXT_PASSWORD);
-#endif
-
 	/* NTP status (informational) */
 	obs_properties_add_text(props, "_ntp_status",
 				obs_module_text("NTPStatus"), OBS_TEXT_INFO);
@@ -858,12 +818,6 @@ static void ltc_source_get_defaults(obs_data_t *settings)
 	obs_data_set_default_int(settings, S_SYNC_INTERVAL, 300);
 	obs_data_set_default_int(settings, S_CAMERA_ID, 0);
 	obs_data_set_default_int(settings, S_AUDIO_TRACK, 3);
-#ifdef ENABLE_FRONTEND_API
-	obs_data_set_default_bool(settings, S_MW_ENABLED, false);
-	obs_data_set_default_string(settings, S_MW_SERVER_URL, "");
-	obs_data_set_default_string(settings, S_MW_USER_NAME, "");
-	obs_data_set_default_string(settings, S_MW_API_KEY, "");
-#endif
 }
 
 /* ---- Source registration ---- */

@@ -17,53 +17,25 @@
  *
  * mw-recording.h - MW recording status reporting
  *
- * Sends recording start/stop/heartbeat signals to a remote PHP server
- * so a central dashboard can show which cameras are currently recording.
- * Includes DSGVO consent handling before any data is transmitted.
+ * Adds a "MW Aufnahme" entry under OBS Tools menu.
+ * Hooks into recording start/stop to send status to a remote server.
+ * Settings are stored in OBS user config (global, not per-source).
  */
 
 #pragma once
 
 #ifdef ENABLE_FRONTEND_API
 
-#include <stdbool.h>
-
-typedef struct mw_recording mw_recording_t;
-
 /*
- * Create a new MW recording context. Call once per LTC source instance.
- */
-mw_recording_t *mw_recording_create(void);
-
-/*
- * Destroy the MW recording context and stop any background threads.
- */
-void mw_recording_destroy(mw_recording_t *mw);
-
-/*
- * Update settings from OBS source properties.
- * Called when the user changes settings in the source properties dialog.
- */
-void mw_recording_update(mw_recording_t *mw, const char *server_url,
-			  const char *user_name, const char *api_key,
-			  int camera_id, bool enabled);
-
-/*
- * Initialize global MW recording state (frontend event callbacks).
+ * Initialize MW recording: register Tools menu item + frontend event callback.
  * Call once from obs_module_load().
  */
 void mw_recording_init(void);
 
 /*
- * Cleanup global MW recording state.
+ * Cleanup MW recording state.
  * Call once from obs_module_unload().
  */
 void mw_recording_cleanup(void);
-
-/* OBS source property keys for MW recording */
-#define S_MW_ENABLED "mw_enabled"
-#define S_MW_SERVER_URL "mw_server_url"
-#define S_MW_USER_NAME "mw_user_name"
-#define S_MW_API_KEY "mw_api_key"
 
 #endif /* ENABLE_FRONTEND_API */
