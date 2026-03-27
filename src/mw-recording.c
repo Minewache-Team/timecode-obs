@@ -20,6 +20,7 @@
  * Adds "MW Aufnahme" to OBS Tools menu with a settings dialog.
  * Hooks into OBS recording start/stop to send status to a remote server.
  * All settings stored in OBS user config (global).
+ * All Win32 UI uses Unicode (W) APIs for proper character rendering.
  */
 
 #ifdef ENABLE_FRONTEND_API
@@ -279,97 +280,164 @@ static void mw_send_stop(void)
 	obs_log(LOG_INFO, "MW recording stopped: '%s' camera %c", name, 'A' + cam);
 }
 
-/* ---- Consent handling ---- */
+/* ================================================================
+ * Win32 Dark-Theme UI Helpers
+ * All dialogs use Unicode (W) APIs and a dark color scheme
+ * matching the OBS Studio appearance.
+ * ================================================================ */
 
 #ifdef _WIN32
+
+#define MW_BG_COLOR RGB(26, 26, 46)
+#define MW_BG_EDIT RGB(15, 52, 96)
+#define MW_FG_COLOR RGB(224, 224, 224)
+#define MW_FG_DIM RGB(136, 136, 136)
+#define MW_ACCENT RGB(79, 195, 247)
+
+static HBRUSH g_bg_brush = NULL;
+static HBRUSH g_edit_brush = NULL;
+
+static void ensure_brushes(void)
+{
+	if (!g_bg_brush)
+		g_bg_brush = CreateSolidBrush(MW_BG_COLOR);
+	if (!g_edit_brush)
+		g_edit_brush = CreateSolidBrush(MW_BG_EDIT);
+}
+
+static HFONT create_font(int size, bool bold)
+{
+	return CreateFontW(-size, 0, 0, 0, bold ? FW_BOLD : FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+			   OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
+			   L"Segoe UI");
+}
+
+/* Convert UTF-8 to wide string (caller must free result) */
+static wchar_t *utf8_to_wide(const char *utf8)
+{
+	if (!utf8 || !utf8[0])
+		return _wcsdup(L"");
+	int len = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+	wchar_t *w = malloc(len * sizeof(wchar_t));
+	MultiByteToWideChar(CP_UTF8, 0, utf8, -1, w, len);
+	return w;
+}
+
+/* Dark theme color handler — call from WM_CTLCOLORSTATIC / WM_CTLCOLOREDIT etc. */
+static LRESULT handle_ctlcolor(HDC hdc, bool is_edit)
+{
+	SetTextColor(hdc, MW_FG_COLOR);
+	SetBkColor(hdc, is_edit ? MW_BG_EDIT : MW_BG_COLOR);
+	return (LRESULT)(is_edit ? g_edit_brush : g_bg_brush);
+}
+
+/* ================================================================
+ * DSGVO Consent Dialog (Unicode, dark theme, clickable links)
+ * ================================================================ */
 
 #define IDC_CONSENT_YES 2001
 #define IDC_CONSENT_NO 2002
 
 static bool g_consent_result = false;
-static char g_consent_server[512];
+static wchar_t g_consent_server_w[512];
 
 static LRESULT CALLBACK consent_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
 	switch (msg) {
 	case WM_CREATE: {
-		HFONT hFont = CreateFontA(-14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-					  DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-					  CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, "Segoe UI");
-		HFONT hFontBold = CreateFontA(-16, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-					      DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-					      CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, "Segoe UI");
+		ensure_brushes();
+		HFONT hFont = create_font(14, false);
+		HFONT hFontBold = create_font(16, false);
+		HFONT hTitleFont = create_font(18, true);
 
-		int y = 15, x = 20, w = 440;
+		int y = 20, x = 24, w = 432;
 
 		/* Title */
-		HWND title = CreateWindowA("STATIC", "MW Aufnahme - Datenschutz (DSGVO)",
-					   WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, 24, hwnd, NULL, NULL, NULL);
-		SendMessageA(title, WM_SETFONT, (WPARAM)hFontBold, TRUE);
-		y += 35;
+		HWND title = CreateWindowW(L"STATIC", L"MW Aufnahme \u2013 Datenschutz (DSGVO)",
+					   WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, 28, hwnd, NULL, NULL, NULL);
+		SendMessageW(title, WM_SETFONT, (WPARAM)hTitleFont, TRUE);
+		y += 40;
 
-		/* Info text */
-		HWND info = CreateWindowA("STATIC",
-					  "Durch die MW-Aufnahme werden folgende Daten\r\n"
-					  "an den Server uebermittelt:\r\n\r\n"
-					  "  \xE2\x80\xA2  Dein Anzeigename\r\n"
-					  "  \xE2\x80\xA2  Deine Kamera-ID (A-H)\r\n"
-					  "  \xE2\x80\xA2  Aufnahmestatus (online/offline)\r\n"
-					  "  \xE2\x80\xA2  Zeitstempel (Start, Stop, Heartbeat)\r\n\r\n"
-					  "NUR der Regisseur kann diese Daten einsehen.\r\n"
-					  "Es werden KEINE Audio-, Video- oder Bilddaten\r\n"
-					  "uebertragen.\r\n\r\n"
-					  "Sessions werden nach 30 Tagen automatisch\r\n"
-					  "geloescht. Du kannst deine Einwilligung\r\n"
-					  "jederzeit widerrufen.",
-					  WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, 220, hwnd, NULL, NULL, NULL);
-		SendMessageA(info, WM_SETFONT, (WPARAM)hFont, TRUE);
-		y += 225;
+		/* Info text with proper Unicode bullets */
+		HWND info = CreateWindowW(L"STATIC",
+					  L"Durch die MW-Aufnahme werden folgende Daten\r\n"
+					  L"an den Server \u00FCbermittelt:\r\n"
+					  L"\r\n"
+					  L"  \u2022  Dein Anzeigename\r\n"
+					  L"  \u2022  Deine Kamera-ID (A\u2013H)\r\n"
+					  L"  \u2022  Aufnahmestatus (online/offline)\r\n"
+					  L"  \u2022  Zeitstempel (Start, Stop, Heartbeat)\r\n"
+					  L"\r\n"
+					  L"NUR der Regisseur kann diese Daten einsehen.\r\n"
+					  L"Es werden KEINE Audio-, Video- oder Bilddaten\r\n"
+					  L"\u00FCbertragen.\r\n"
+					  L"\r\n"
+					  L"Sessions werden nach 30 Tagen automatisch\r\n"
+					  L"gel\u00F6scht. Du kannst deine Einwilligung\r\n"
+					  L"jederzeit widerrufen.",
+					  WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, 240, hwnd, NULL, NULL, NULL);
+		SendMessageW(info, WM_SETFONT, (WPARAM)hFont, TRUE);
+		y += 248;
 
-		/* Server link */
-		char server_link[600];
-		snprintf(server_link, sizeof(server_link), "Server: <a href=\"%s\">%s</a>", g_consent_server,
-			 g_consent_server);
-		HWND link1 = CreateWindowA("SysLink", server_link, WS_CHILD | WS_VISIBLE, x, y, w, 20, hwnd, NULL,
+		/* Separator line */
+		CreateWindowW(L"STATIC", NULL, WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ, x, y, w, 2, hwnd, NULL, NULL,
+			      NULL);
+		y += 12;
+
+		/* Server link (SysLink needs Unicode) */
+		wchar_t link_buf[700];
+		_snwprintf(link_buf, 700, L"Server: <a href=\"%ls\">%ls</a>", g_consent_server_w,
+			   g_consent_server_w);
+		HWND link1 = CreateWindowW(L"SysLink", link_buf, WS_CHILD | WS_VISIBLE, x, y, w, 22, hwnd, NULL,
 					   NULL, NULL);
-		SendMessageA(link1, WM_SETFONT, (WPARAM)hFont, TRUE);
-		y += 24;
+		SendMessageW(link1, WM_SETFONT, (WPARAM)hFont, TRUE);
+		y += 26;
 
 		/* Datenschutz link */
-		char dsgvo_link[700];
-		snprintf(dsgvo_link, sizeof(dsgvo_link),
-			 "<a href=\"%s/datenschutz.php\">Datenschutzerklaerung oeffnen</a>", g_consent_server);
-		HWND link2 = CreateWindowA("SysLink", dsgvo_link, WS_CHILD | WS_VISIBLE, x, y, w, 20, hwnd, NULL,
+		wchar_t dsgvo_buf[700];
+		_snwprintf(dsgvo_buf, 700, L"<a href=\"%ls/datenschutz.php\">Datenschutzerkl\u00E4rung \u00F6ffnen</a>",
+			   g_consent_server_w);
+		HWND link2 = CreateWindowW(L"SysLink", dsgvo_buf, WS_CHILD | WS_VISIBLE, x, y, w, 22, hwnd, NULL,
 					   NULL, NULL);
-		SendMessageA(link2, WM_SETFONT, (WPARAM)hFont, TRUE);
+		SendMessageW(link2, WM_SETFONT, (WPARAM)hFont, TRUE);
 		y += 40;
 
 		/* Question */
-		HWND q = CreateWindowA("STATIC", "Bist du damit einverstanden?", WS_CHILD | WS_VISIBLE | SS_LEFT, x,
-				       y, w, 20, hwnd, NULL, NULL, NULL);
-		SendMessageA(q, WM_SETFONT, (WPARAM)hFontBold, TRUE);
-		y += 30;
+		HWND q = CreateWindowW(L"STATIC", L"Bist du damit einverstanden?",
+				       WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, 24, hwnd, NULL, NULL, NULL);
+		SendMessageW(q, WM_SETFONT, (WPARAM)hFontBold, TRUE);
+		y += 34;
 
 		/* Buttons */
-		HWND btnYes = CreateWindowA("BUTTON", "Ja, einverstanden", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
-					    x, y, 150, 35, hwnd, (HMENU)(INT_PTR)IDC_CONSENT_YES, NULL, NULL);
-		SendMessageA(btnYes, WM_SETFONT, (WPARAM)hFontBold, TRUE);
+		HWND btnYes = CreateWindowW(L"BUTTON", L"Ja, einverstanden",
+					    WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, x, y, 160, 38, hwnd,
+					    (HMENU)(INT_PTR)IDC_CONSENT_YES, NULL, NULL);
+		SendMessageW(btnYes, WM_SETFONT, (WPARAM)hFontBold, TRUE);
 
-		HWND btnNo = CreateWindowA("BUTTON", "Nein, ablehnen", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-					   x + 170, y, 150, 35, hwnd, (HMENU)(INT_PTR)IDC_CONSENT_NO, NULL, NULL);
-		SendMessageA(btnNo, WM_SETFONT, (WPARAM)hFont, TRUE);
+		HWND btnNo = CreateWindowW(L"BUTTON", L"Nein, ablehnen", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+					   x + 180, y, 160, 38, hwnd, (HMENU)(INT_PTR)IDC_CONSENT_NO, NULL, NULL);
+		SendMessageW(btnNo, WM_SETFONT, (WPARAM)hFont, TRUE);
 
 		return 0;
+	}
+
+	case WM_CTLCOLORSTATIC:
+		return handle_ctlcolor((HDC)wParam, false);
+
+	case WM_ERASEBKGND: {
+		ensure_brushes();
+		RECT rc;
+		GetClientRect(hwnd, &rc);
+		FillRect((HDC)wParam, &rc, g_bg_brush);
+		return 1;
 	}
 
 	case WM_NOTIFY: {
 		NMHDR *nmhdr = (NMHDR *)lParam;
 		if (nmhdr->code == NM_CLICK || nmhdr->code == NM_RETURN) {
 			NMLINK *link = (NMLINK *)lParam;
-			char url[700];
-			WideCharToMultiByte(CP_UTF8, 0, link->item.szUrl, -1, url, sizeof(url), NULL, NULL);
-			if (url[0])
-				ShellExecuteA(NULL, "open", url, NULL, NULL, SW_SHOWNORMAL);
+			if (link->item.szUrl[0])
+				ShellExecuteW(NULL, L"open", link->item.szUrl, NULL, NULL, SW_SHOWNORMAL);
 		}
 		return 0;
 	}
@@ -394,12 +462,15 @@ static LRESULT CALLBACK consent_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LPA
 		return 0;
 	}
 
-	return DefWindowProcA(hwnd, msg, wParam, lParam);
+	return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
 static bool show_consent_dialog(const char *server_url)
 {
-	snprintf(g_consent_server, sizeof(g_consent_server), "%s", server_url);
+	wchar_t *server_w = utf8_to_wide(server_url);
+	wcsncpy(g_consent_server_w, server_w, 511);
+	g_consent_server_w[511] = 0;
+	free(server_w);
 	g_consent_result = false;
 
 	static bool class_registered = false;
@@ -407,36 +478,294 @@ static bool show_consent_dialog(const char *server_url)
 		INITCOMMONCONTROLSEX icc = {sizeof(icc), ICC_LINK_CLASS};
 		InitCommonControlsEx(&icc);
 
-		WNDCLASSA wc = {0};
+		WNDCLASSW wc = {0};
 		wc.lpfnWndProc = consent_wnd_proc;
-		wc.hInstance = GetModuleHandleA(NULL);
+		wc.hInstance = GetModuleHandleW(NULL);
 		wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-		wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-		wc.lpszClassName = "MWConsentDialog";
-		RegisterClassA(&wc);
+		wc.hbrBackground = NULL; /* We paint our own background */
+		wc.lpszClassName = L"MWConsentDialog";
+		RegisterClassW(&wc);
 		class_registered = true;
 	}
 
-	HWND hwnd = CreateWindowExA(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST, "MWConsentDialog",
-				    "MW Aufnahme - DSGVO Einwilligung",
+	HWND hwnd = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST, L"MWConsentDialog",
+				    L"MW Aufnahme \u2013 DSGVO Einwilligung",
 				    WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 500,
-				    470, NULL, NULL, GetModuleHandleA(NULL), NULL);
+				    510, NULL, NULL, GetModuleHandleW(NULL), NULL);
 
 	ShowWindow(hwnd, SW_SHOW);
 	UpdateWindow(hwnd);
 
-	/* Run modal message loop */
 	MSG m;
-	while (GetMessageA(&m, NULL, 0, 0)) {
+	while (GetMessageW(&m, NULL, 0, 0)) {
 		if (!IsWindow(hwnd))
 			break;
 		TranslateMessage(&m);
-		DispatchMessageA(&m);
+		DispatchMessageW(&m);
 	}
 
 	return g_consent_result;
 }
-#endif
+
+/* ================================================================
+ * Settings Dialog (Unicode, dark theme)
+ * ================================================================ */
+
+#define IDC_SERVER_URL 1001
+#define IDC_USER_NAME 1002
+#define IDC_API_KEY 1003
+#define IDC_CAMERA_ID 1004
+#define IDC_ENABLED 1005
+#define IDC_SAVE 1006
+#define IDC_RESET_CONSENT 1007
+#define IDC_STATUS_LABEL 1008
+
+static HWND g_settings_hwnd = NULL;
+
+static void update_status_label(HWND hwnd)
+{
+	const wchar_t *text;
+	if (g_mw.enabled) {
+		if (g_mw.recording_active)
+			text = L"\u25CF  Aufnahme l\u00E4uft \u2013 Daten werden gesendet";
+		else if (g_mw.consent_given)
+			text = L"\u25CF  Bereit \u2013 Warte auf Aufnahmestart";
+		else
+			text = L"\u25CB  Aktiviert \u2013 DSGVO-Einwilligung ausstehend";
+	} else {
+		text = L"\u25CB  Deaktiviert";
+	}
+	SetDlgItemTextW(hwnd, IDC_STATUS_LABEL, text);
+}
+
+static LRESULT CALLBACK settings_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+	switch (msg) {
+	case WM_CREATE: {
+		ensure_brushes();
+		HFONT hFont = create_font(14, false);
+		HFONT hFontBold = create_font(14, true);
+		HFONT hTitleFont = create_font(18, true);
+		HFONT hSmallFont = create_font(12, false);
+
+		int y = 18;
+		int lbl_x = 22, edit_x = 160, w = 290, h = 26;
+		int full_w = 440;
+
+		/* Title */
+		HWND title = CreateWindowW(L"STATIC", L"MW Aufnahme", WS_CHILD | WS_VISIBLE | SS_LEFT, lbl_x, y,
+					   full_w, 28, hwnd, NULL, NULL, NULL);
+		SendMessageW(title, WM_SETFONT, (WPARAM)hTitleFont, TRUE);
+		y += 32;
+
+		/* Status label */
+		HWND status = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT, lbl_x, y, full_w, 20,
+					    hwnd, (HMENU)(INT_PTR)IDC_STATUS_LABEL, NULL, NULL);
+		SendMessageW(status, WM_SETFONT, (WPARAM)hSmallFont, TRUE);
+		y += 30;
+
+		/* Separator */
+		CreateWindowW(L"STATIC", NULL, WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ, lbl_x, y, full_w, 2, hwnd,
+			      NULL, NULL, NULL);
+		y += 14;
+
+		/* Enabled checkbox */
+		HWND chk = CreateWindowW(L"BUTTON", L"MW Aufnahme aktivieren",
+					 WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, lbl_x, y, 300, h, hwnd,
+					 (HMENU)(INT_PTR)IDC_ENABLED, NULL, NULL);
+		SendMessageW(chk, WM_SETFONT, (WPARAM)hFontBold, TRUE);
+		y += 34;
+
+		/* Server URL */
+		HWND lbl1 = CreateWindowW(L"STATIC", L"Server URL:", WS_CHILD | WS_VISIBLE | SS_LEFT, lbl_x, y + 3,
+					  130, h, hwnd, NULL, NULL, NULL);
+		SendMessageW(lbl1, WM_SETFONT, (WPARAM)hFont, TRUE);
+		HWND ed1 = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
+					   edit_x, y, w, h, hwnd, (HMENU)(INT_PTR)IDC_SERVER_URL, NULL, NULL);
+		SendMessageW(ed1, WM_SETFONT, (WPARAM)hFont, TRUE);
+		y += 34;
+
+		/* Anzeigename */
+		HWND lbl2 = CreateWindowW(L"STATIC", L"Anzeigename:", WS_CHILD | WS_VISIBLE | SS_LEFT, lbl_x, y + 3,
+					  130, h, hwnd, NULL, NULL, NULL);
+		SendMessageW(lbl2, WM_SETFONT, (WPARAM)hFont, TRUE);
+		HWND ed2 = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
+					   edit_x, y, w, h, hwnd, (HMENU)(INT_PTR)IDC_USER_NAME, NULL, NULL);
+		SendMessageW(ed2, WM_SETFONT, (WPARAM)hFont, TRUE);
+		y += 34;
+
+		/* API Key */
+		HWND lbl3 = CreateWindowW(L"STATIC", L"API Key:", WS_CHILD | WS_VISIBLE | SS_LEFT, lbl_x, y + 3, 130,
+					  h, hwnd, NULL, NULL, NULL);
+		SendMessageW(lbl3, WM_SETFONT, (WPARAM)hFont, TRUE);
+		HWND ed3 = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+					   WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_PASSWORD, edit_x, y, w, h,
+					   hwnd, (HMENU)(INT_PTR)IDC_API_KEY, NULL, NULL);
+		SendMessageW(ed3, WM_SETFONT, (WPARAM)hFont, TRUE);
+		y += 34;
+
+		/* Camera ID */
+		HWND lbl4 = CreateWindowW(L"STATIC", L"Kamera:", WS_CHILD | WS_VISIBLE | SS_LEFT, lbl_x, y + 3, 130,
+					  h, hwnd, NULL, NULL, NULL);
+		SendMessageW(lbl4, WM_SETFONT, (WPARAM)hFont, TRUE);
+		HWND combo = CreateWindowW(L"COMBOBOX", L"",
+					   WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, edit_x, y, 80,
+					   200, hwnd, (HMENU)(INT_PTR)IDC_CAMERA_ID, NULL, NULL);
+		SendMessageW(combo, WM_SETFONT, (WPARAM)hFont, TRUE);
+		for (int i = 0; i < 8; i++) {
+			wchar_t cam[4];
+			cam[0] = L'A' + i;
+			cam[1] = 0;
+			SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)cam);
+		}
+		y += 44;
+
+		/* Separator */
+		CreateWindowW(L"STATIC", NULL, WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ, lbl_x, y, full_w, 2, hwnd,
+			      NULL, NULL, NULL);
+		y += 14;
+
+		/* Buttons */
+		HWND btn = CreateWindowW(L"BUTTON", L"Speichern", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, lbl_x, y,
+					 130, 34, hwnd, (HMENU)(INT_PTR)IDC_SAVE, NULL, NULL);
+		SendMessageW(btn, WM_SETFONT, (WPARAM)hFontBold, TRUE);
+
+		HWND btn2 = CreateWindowW(L"BUTTON", L"DSGVO zur\u00FCcksetzen",
+					  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, lbl_x + 145, y, 170, 34, hwnd,
+					  (HMENU)(INT_PTR)IDC_RESET_CONSENT, NULL, NULL);
+		SendMessageW(btn2, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+		/* Populate fields from config */
+		pthread_mutex_lock(&g_mw.mutex);
+		{
+			wchar_t *wu = utf8_to_wide(g_mw.server_url);
+			SetDlgItemTextW(hwnd, IDC_SERVER_URL, wu);
+			free(wu);
+		}
+		{
+			wchar_t *wu = utf8_to_wide(g_mw.user_name);
+			SetDlgItemTextW(hwnd, IDC_USER_NAME, wu);
+			free(wu);
+		}
+		{
+			wchar_t *wu = utf8_to_wide(g_mw.api_key);
+			SetDlgItemTextW(hwnd, IDC_API_KEY, wu);
+			free(wu);
+		}
+		SendDlgItemMessageW(hwnd, IDC_CAMERA_ID, CB_SETCURSEL, g_mw.camera_id, 0);
+		CheckDlgButton(hwnd, IDC_ENABLED, g_mw.enabled ? BST_CHECKED : BST_UNCHECKED);
+		pthread_mutex_unlock(&g_mw.mutex);
+
+		update_status_label(hwnd);
+		return 0;
+	}
+
+	case WM_CTLCOLORSTATIC:
+		return handle_ctlcolor((HDC)wParam, false);
+
+	case WM_CTLCOLOREDIT:
+		return handle_ctlcolor((HDC)wParam, true);
+
+	case WM_CTLCOLORLISTBOX:
+		return handle_ctlcolor((HDC)wParam, true);
+
+	case WM_ERASEBKGND: {
+		ensure_brushes();
+		RECT rc;
+		GetClientRect(hwnd, &rc);
+		FillRect((HDC)wParam, &rc, g_bg_brush);
+		return 1;
+	}
+
+	case WM_COMMAND:
+		if (LOWORD(wParam) == IDC_SAVE) {
+			wchar_t wbuf[512];
+
+			pthread_mutex_lock(&g_mw.mutex);
+
+			GetDlgItemTextW(hwnd, IDC_SERVER_URL, wbuf, 512);
+			WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, g_mw.server_url, sizeof(g_mw.server_url), NULL,
+					    NULL);
+
+			GetDlgItemTextW(hwnd, IDC_USER_NAME, wbuf, 100);
+			WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, g_mw.user_name, sizeof(g_mw.user_name), NULL,
+					    NULL);
+
+			GetDlgItemTextW(hwnd, IDC_API_KEY, wbuf, 256);
+			WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, g_mw.api_key, sizeof(g_mw.api_key), NULL, NULL);
+
+			g_mw.camera_id = (int)SendDlgItemMessageW(hwnd, IDC_CAMERA_ID, CB_GETCURSEL, 0, 0);
+			if (g_mw.camera_id < 0)
+				g_mw.camera_id = 0;
+			g_mw.enabled = IsDlgButtonChecked(hwnd, IDC_ENABLED) == BST_CHECKED;
+
+			pthread_mutex_unlock(&g_mw.mutex);
+
+			save_config();
+			update_status_label(hwnd);
+			obs_log(LOG_INFO, "MW recording settings saved (enabled=%d)", g_mw.enabled);
+			MessageBoxW(hwnd, L"Einstellungen gespeichert!", L"MW Aufnahme", MB_OK | MB_ICONINFORMATION);
+		}
+
+		if (LOWORD(wParam) == IDC_RESET_CONSENT) {
+			int r = MessageBoxW(hwnd,
+					    L"DSGVO-Einwilligung zur\u00FCcksetzen?\n\n"
+					    L"Beim n\u00E4chsten Aufnahmestart wirst du "
+					    L"erneut nach deiner Einwilligung gefragt.",
+					    L"MW Aufnahme", MB_YESNO | MB_ICONQUESTION);
+			if (r == IDYES) {
+				g_mw.consent_given = false;
+				save_config();
+				update_status_label(hwnd);
+				obs_log(LOG_INFO, "MW recording: consent reset");
+				MessageBoxW(hwnd, L"Einwilligung zur\u00FCckgesetzt.", L"MW Aufnahme",
+					    MB_OK | MB_ICONINFORMATION);
+			}
+		}
+		return 0;
+
+	case WM_CLOSE:
+		DestroyWindow(hwnd);
+		return 0;
+
+	case WM_DESTROY:
+		g_settings_hwnd = NULL;
+		return 0;
+	}
+
+	return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+static void open_settings_dialog(void)
+{
+	if (g_settings_hwnd) {
+		SetForegroundWindow(g_settings_hwnd);
+		return;
+	}
+
+	static bool class_registered = false;
+	if (!class_registered) {
+		WNDCLASSW wc = {0};
+		wc.lpfnWndProc = settings_wnd_proc;
+		wc.hInstance = GetModuleHandleW(NULL);
+		wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+		wc.hbrBackground = NULL;
+		wc.lpszClassName = L"MWRecordingSettings";
+		RegisterClassW(&wc);
+		class_registered = true;
+	}
+
+	g_settings_hwnd = CreateWindowExW(WS_EX_DLGMODALFRAME, L"MWRecordingSettings", L"MW Aufnahme",
+					  WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT,
+					  500, 420, NULL, NULL, GetModuleHandleW(NULL), NULL);
+
+	ShowWindow(g_settings_hwnd, SW_SHOW);
+	UpdateWindow(g_settings_hwnd);
+}
+
+#endif /* _WIN32 */
+
+/* ---- Consent handling ---- */
 
 static bool ensure_consent(void)
 {
@@ -515,201 +844,17 @@ static void on_frontend_event(enum obs_frontend_event event, void *data)
 	if (event == OBS_FRONTEND_EVENT_RECORDING_PAUSED) {
 #ifdef _WIN32
 		if (g_mw.recording_active) {
-			MessageBoxA(NULL,
-				    "Achtung: Die Aufnahme wurde pausiert!\n\n"
-				    "Das Pausieren der Aufnahme kann den "
-				    "Timecode-Sync zerstoeren.\n\n"
-				    "Bitte die Aufnahme nicht pausieren, "
-				    "sondern stoppen und neu starten.",
-				    "MW Aufnahme - Warnung",
-				    MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL);
+			MessageBoxW(NULL,
+				    L"Achtung: Die Aufnahme wurde pausiert!\n\n"
+				    L"Das Pausieren der Aufnahme kann den "
+				    L"Timecode-Sync zerst\u00F6ren.\n\n"
+				    L"Bitte die Aufnahme nicht pausieren, "
+				    L"sondern stoppen und neu starten.",
+				    L"MW Aufnahme \u2013 Warnung", MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL);
 		}
 #endif
 	}
 }
-
-/* ---- Win32 Settings Dialog ---- */
-
-#ifdef _WIN32
-
-#define IDC_SERVER_URL 1001
-#define IDC_USER_NAME 1002
-#define IDC_API_KEY 1003
-#define IDC_CAMERA_ID 1004
-#define IDC_ENABLED 1005
-#define IDC_SAVE 1006
-#define IDC_RESET_CONSENT 1007
-
-static HWND g_settings_hwnd = NULL;
-
-static LRESULT CALLBACK settings_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
-{
-	switch (msg) {
-	case WM_CREATE: {
-		HFONT hFont = CreateFontA(-14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-					  DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-					  CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, "Segoe UI");
-		HFONT hFontBold = CreateFontA(-14, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-					      DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-					      CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, "Segoe UI");
-
-		int y = 15;
-		int lbl_x = 20, edit_x = 160, w = 280, h = 24;
-
-		/* Title */
-		HWND title = CreateWindowA("STATIC", "MW Aufnahme - Einstellungen", WS_CHILD | WS_VISIBLE | SS_LEFT,
-					   lbl_x, y, 420, 28, hwnd, NULL, NULL, NULL);
-		SendMessageA(title, WM_SETFONT, (WPARAM)hFontBold, TRUE);
-		y += 40;
-
-		/* Enabled checkbox */
-		HWND chk = CreateWindowA("BUTTON", "MW Aufnahme aktivieren",
-					 WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, lbl_x, y, 300, h, hwnd,
-					 (HMENU)(INT_PTR)IDC_ENABLED, NULL, NULL);
-		SendMessageA(chk, WM_SETFONT, (WPARAM)hFont, TRUE);
-		y += 35;
-
-		/* Server URL */
-		HWND lbl1 = CreateWindowA("STATIC", "Server URL:", WS_CHILD | WS_VISIBLE | SS_LEFT, lbl_x, y + 2,
-					  130, h, hwnd, NULL, NULL, NULL);
-		SendMessageA(lbl1, WM_SETFONT, (WPARAM)hFont, TRUE);
-		HWND ed1 = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
-					   WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, edit_x, y, w, h, hwnd,
-					   (HMENU)(INT_PTR)IDC_SERVER_URL, NULL, NULL);
-		SendMessageA(ed1, WM_SETFONT, (WPARAM)hFont, TRUE);
-		y += 32;
-
-		/* Anzeigename */
-		HWND lbl2 = CreateWindowA("STATIC", "Anzeigename:", WS_CHILD | WS_VISIBLE | SS_LEFT, lbl_x, y + 2,
-					  130, h, hwnd, NULL, NULL, NULL);
-		SendMessageA(lbl2, WM_SETFONT, (WPARAM)hFont, TRUE);
-		HWND ed2 = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
-					   WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, edit_x, y, w, h, hwnd,
-					   (HMENU)(INT_PTR)IDC_USER_NAME, NULL, NULL);
-		SendMessageA(ed2, WM_SETFONT, (WPARAM)hFont, TRUE);
-		y += 32;
-
-		/* API Key */
-		HWND lbl3 = CreateWindowA("STATIC", "API Key:", WS_CHILD | WS_VISIBLE | SS_LEFT, lbl_x, y + 2, 130,
-					  h, hwnd, NULL, NULL, NULL);
-		SendMessageA(lbl3, WM_SETFONT, (WPARAM)hFont, TRUE);
-		HWND ed3 = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
-					   WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_PASSWORD, edit_x, y, w, h,
-					   hwnd, (HMENU)(INT_PTR)IDC_API_KEY, NULL, NULL);
-		SendMessageA(ed3, WM_SETFONT, (WPARAM)hFont, TRUE);
-		y += 32;
-
-		/* Camera ID */
-		HWND lbl4 = CreateWindowA("STATIC", "Kamera:", WS_CHILD | WS_VISIBLE | SS_LEFT, lbl_x, y + 2, 130,
-					  h, hwnd, NULL, NULL, NULL);
-		SendMessageA(lbl4, WM_SETFONT, (WPARAM)hFont, TRUE);
-		HWND combo = CreateWindowA("COMBOBOX", "",
-					   WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, edit_x, y, 80,
-					   200, hwnd, (HMENU)(INT_PTR)IDC_CAMERA_ID, NULL, NULL);
-		SendMessageA(combo, WM_SETFONT, (WPARAM)hFont, TRUE);
-		for (int i = 0; i < 8; i++) {
-			char cam[4];
-			snprintf(cam, sizeof(cam), "%c", 'A' + i);
-			SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)cam);
-		}
-		y += 45;
-
-		/* Save button */
-		HWND btn = CreateWindowA("BUTTON", "Speichern", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, edit_x, y,
-					 120, 32, hwnd, (HMENU)(INT_PTR)IDC_SAVE, NULL, NULL);
-		SendMessageA(btn, WM_SETFONT, (WPARAM)hFontBold, TRUE);
-
-		/* Reset consent button */
-		HWND btn2 = CreateWindowA("BUTTON", "DSGVO zuruecksetzen", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-					  edit_x + 130, y, 150, 32, hwnd,
-					  (HMENU)(INT_PTR)IDC_RESET_CONSENT, NULL, NULL);
-		SendMessageA(btn2, WM_SETFONT, (WPARAM)hFont, TRUE);
-
-		/* Populate fields from config */
-		pthread_mutex_lock(&g_mw.mutex);
-		SetDlgItemTextA(hwnd, IDC_SERVER_URL, g_mw.server_url);
-		SetDlgItemTextA(hwnd, IDC_USER_NAME, g_mw.user_name);
-		SetDlgItemTextA(hwnd, IDC_API_KEY, g_mw.api_key);
-		SendDlgItemMessageA(hwnd, IDC_CAMERA_ID, CB_SETCURSEL, g_mw.camera_id, 0);
-		CheckDlgButton(hwnd, IDC_ENABLED, g_mw.enabled ? BST_CHECKED : BST_UNCHECKED);
-		pthread_mutex_unlock(&g_mw.mutex);
-
-		return 0;
-	}
-
-	case WM_COMMAND:
-		if (LOWORD(wParam) == IDC_SAVE) {
-			pthread_mutex_lock(&g_mw.mutex);
-			GetDlgItemTextA(hwnd, IDC_SERVER_URL, g_mw.server_url, sizeof(g_mw.server_url));
-			GetDlgItemTextA(hwnd, IDC_USER_NAME, g_mw.user_name, sizeof(g_mw.user_name));
-			GetDlgItemTextA(hwnd, IDC_API_KEY, g_mw.api_key, sizeof(g_mw.api_key));
-			g_mw.camera_id = (int)SendDlgItemMessageA(hwnd, IDC_CAMERA_ID, CB_GETCURSEL, 0, 0);
-			if (g_mw.camera_id < 0)
-				g_mw.camera_id = 0;
-			g_mw.enabled = IsDlgButtonChecked(hwnd, IDC_ENABLED) == BST_CHECKED;
-			pthread_mutex_unlock(&g_mw.mutex);
-
-			save_config();
-			obs_log(LOG_INFO, "MW recording settings saved (enabled=%d)", g_mw.enabled);
-			MessageBoxA(hwnd, "Einstellungen gespeichert!", "MW Aufnahme", MB_OK | MB_ICONINFORMATION);
-		}
-
-		if (LOWORD(wParam) == IDC_RESET_CONSENT) {
-			int r = MessageBoxA(hwnd,
-					    "DSGVO-Einwilligung zuruecksetzen?\n\n"
-					    "Beim naechsten Aufnahmestart wirst du "
-					    "erneut nach deiner Einwilligung gefragt.",
-					    "MW Aufnahme", MB_YESNO | MB_ICONQUESTION);
-			if (r == IDYES) {
-				g_mw.consent_given = false;
-				save_config();
-				obs_log(LOG_INFO, "MW recording: consent reset");
-				MessageBoxA(hwnd, "Einwilligung zurueckgesetzt.", "MW Aufnahme",
-					    MB_OK | MB_ICONINFORMATION);
-			}
-		}
-		return 0;
-
-	case WM_CLOSE:
-		DestroyWindow(hwnd);
-		return 0;
-
-	case WM_DESTROY:
-		g_settings_hwnd = NULL;
-		return 0;
-	}
-
-	return DefWindowProcA(hwnd, msg, wParam, lParam);
-}
-
-static void open_settings_dialog(void)
-{
-	if (g_settings_hwnd) {
-		SetForegroundWindow(g_settings_hwnd);
-		return;
-	}
-
-	static bool class_registered = false;
-	if (!class_registered) {
-		WNDCLASSA wc = {0};
-		wc.lpfnWndProc = settings_wnd_proc;
-		wc.hInstance = GetModuleHandleA(NULL);
-		wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-		wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-		wc.lpszClassName = "MWRecordingSettings";
-		RegisterClassA(&wc);
-		class_registered = true;
-	}
-
-	g_settings_hwnd = CreateWindowExA(WS_EX_DLGMODALFRAME, "MWRecordingSettings", "MW Aufnahme",
-					  WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT,
-					  480, 340, NULL, NULL, GetModuleHandleA(NULL), NULL);
-
-	ShowWindow(g_settings_hwnd, SW_SHOW);
-	UpdateWindow(g_settings_hwnd);
-}
-
-#endif /* _WIN32 */
 
 /* ---- Tools menu callback ---- */
 
@@ -757,6 +902,12 @@ void mw_recording_cleanup(void)
 		DestroyWindow(g_settings_hwnd);
 		g_settings_hwnd = NULL;
 	}
+	if (g_bg_brush)
+		DeleteObject(g_bg_brush);
+	if (g_edit_brush)
+		DeleteObject(g_edit_brush);
+	g_bg_brush = NULL;
+	g_edit_brush = NULL;
 #endif
 
 	pthread_mutex_destroy(&g_mw.mutex);
