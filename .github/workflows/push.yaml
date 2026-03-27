@@ -28,7 +28,7 @@ jobs:
 
   create-release:
     name: Create Release 🛫
-    if: github.ref_type == 'tag'
+    if: github.ref_type == 'tag' && !cancelled()
     runs-on: ubuntu-24.04
     needs: build-project
     defaults:
