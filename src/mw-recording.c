@@ -40,6 +40,8 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <commctrl.h>
+#include <shellapi.h>
+#pragma comment(lib, "comctl32.lib")
 #endif
 
 #define MW_HEARTBEAT_INTERVAL_SEC 30
@@ -280,30 +282,159 @@ static void mw_send_stop(void)
 /* ---- Consent handling ---- */
 
 #ifdef _WIN32
+
+#define IDC_CONSENT_YES 2001
+#define IDC_CONSENT_NO 2002
+
+static bool g_consent_result = false;
+static char g_consent_server[512];
+
+static LRESULT CALLBACK consent_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+	switch (msg) {
+	case WM_CREATE: {
+		HFONT hFont = CreateFontA(-14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+					  DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+					  CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, "Segoe UI");
+		HFONT hFontBold = CreateFontA(-16, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+					      DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+					      CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, "Segoe UI");
+
+		int y = 15, x = 20, w = 440;
+
+		/* Title */
+		HWND title = CreateWindowA("STATIC", "MW Aufnahme - Datenschutz (DSGVO)",
+					   WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, 24, hwnd, NULL, NULL, NULL);
+		SendMessageA(title, WM_SETFONT, (WPARAM)hFontBold, TRUE);
+		y += 35;
+
+		/* Info text */
+		HWND info = CreateWindowA("STATIC",
+					  "Durch die MW-Aufnahme werden folgende Daten\r\n"
+					  "an den Server uebermittelt:\r\n\r\n"
+					  "  \xE2\x80\xA2  Dein Anzeigename\r\n"
+					  "  \xE2\x80\xA2  Deine Kamera-ID (A-H)\r\n"
+					  "  \xE2\x80\xA2  Aufnahmestatus (online/offline)\r\n"
+					  "  \xE2\x80\xA2  Zeitstempel (Start, Stop, Heartbeat)\r\n\r\n"
+					  "NUR der Regisseur kann diese Daten einsehen.\r\n"
+					  "Es werden KEINE Audio-, Video- oder Bilddaten\r\n"
+					  "uebertragen.\r\n\r\n"
+					  "Sessions werden nach 30 Tagen automatisch\r\n"
+					  "geloescht. Du kannst deine Einwilligung\r\n"
+					  "jederzeit widerrufen.",
+					  WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, 220, hwnd, NULL, NULL, NULL);
+		SendMessageA(info, WM_SETFONT, (WPARAM)hFont, TRUE);
+		y += 225;
+
+		/* Server link */
+		char server_link[600];
+		snprintf(server_link, sizeof(server_link), "Server: <a href=\"%s\">%s</a>", g_consent_server,
+			 g_consent_server);
+		HWND link1 = CreateWindowA("SysLink", server_link, WS_CHILD | WS_VISIBLE, x, y, w, 20, hwnd, NULL,
+					   NULL, NULL);
+		SendMessageA(link1, WM_SETFONT, (WPARAM)hFont, TRUE);
+		y += 24;
+
+		/* Datenschutz link */
+		char dsgvo_link[700];
+		snprintf(dsgvo_link, sizeof(dsgvo_link),
+			 "<a href=\"%s/datenschutz.php\">Datenschutzerklaerung oeffnen</a>", g_consent_server);
+		HWND link2 = CreateWindowA("SysLink", dsgvo_link, WS_CHILD | WS_VISIBLE, x, y, w, 20, hwnd, NULL,
+					   NULL, NULL);
+		SendMessageA(link2, WM_SETFONT, (WPARAM)hFont, TRUE);
+		y += 40;
+
+		/* Question */
+		HWND q = CreateWindowA("STATIC", "Bist du damit einverstanden?", WS_CHILD | WS_VISIBLE | SS_LEFT, x,
+				       y, w, 20, hwnd, NULL, NULL, NULL);
+		SendMessageA(q, WM_SETFONT, (WPARAM)hFontBold, TRUE);
+		y += 30;
+
+		/* Buttons */
+		HWND btnYes = CreateWindowA("BUTTON", "Ja, einverstanden", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
+					    x, y, 150, 35, hwnd, (HMENU)(INT_PTR)IDC_CONSENT_YES, NULL, NULL);
+		SendMessageA(btnYes, WM_SETFONT, (WPARAM)hFontBold, TRUE);
+
+		HWND btnNo = CreateWindowA("BUTTON", "Nein, ablehnen", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+					   x + 170, y, 150, 35, hwnd, (HMENU)(INT_PTR)IDC_CONSENT_NO, NULL, NULL);
+		SendMessageA(btnNo, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+		return 0;
+	}
+
+	case WM_NOTIFY: {
+		NMHDR *nmhdr = (NMHDR *)lParam;
+		if (nmhdr->code == NM_CLICK || nmhdr->code == NM_RETURN) {
+			NMLINK *link = (NMLINK *)lParam;
+			char url[700];
+			WideCharToMultiByte(CP_UTF8, 0, link->item.szUrl, -1, url, sizeof(url), NULL, NULL);
+			if (url[0])
+				ShellExecuteA(NULL, "open", url, NULL, NULL, SW_SHOWNORMAL);
+		}
+		return 0;
+	}
+
+	case WM_COMMAND:
+		if (LOWORD(wParam) == IDC_CONSENT_YES) {
+			g_consent_result = true;
+			DestroyWindow(hwnd);
+		} else if (LOWORD(wParam) == IDC_CONSENT_NO) {
+			g_consent_result = false;
+			DestroyWindow(hwnd);
+		}
+		return 0;
+
+	case WM_CLOSE:
+		g_consent_result = false;
+		DestroyWindow(hwnd);
+		return 0;
+
+	case WM_DESTROY:
+		PostQuitMessage(0);
+		return 0;
+	}
+
+	return DefWindowProcA(hwnd, msg, wParam, lParam);
+}
+
 static bool show_consent_dialog(const char *server_url)
 {
-	char msg[1024];
-	snprintf(msg, sizeof(msg),
-		 "MW Aufnahme - Datenschutz (DSGVO)\n\n"
-		 "Durch die MW-Aufnahme werden folgende Daten an den "
-		 "Server uebermittelt:\n\n"
-		 "  - Dein Anzeigename\n"
-		 "  - Deine Kamera-ID (A-H)\n"
-		 "  - Aufnahmestatus (online/offline)\n"
-		 "  - Zeitstempel (Start, Stop, Heartbeat)\n\n"
-		 "NUR der Regisseur kann diese Daten einsehen.\n"
-		 "Es werden KEINE Audio-, Video- oder Bilddaten "
-		 "uebertragen.\n\n"
-		 "Sessions werden nach 30 Tagen automatisch geloescht.\n"
-		 "Du kannst deine Einwilligung jederzeit widerrufen.\n\n"
-		 "Server: %s\n"
-		 "Datenschutzerklaerung: %s/datenschutz.php\n\n"
-		 "Bist du damit einverstanden?",
-		 server_url, server_url);
+	snprintf(g_consent_server, sizeof(g_consent_server), "%s", server_url);
+	g_consent_result = false;
 
-	int result = MessageBoxA(NULL, msg, "MW Aufnahme - DSGVO Einwilligung",
-				 MB_YESNO | MB_ICONQUESTION | MB_SYSTEMMODAL);
-	return result == IDYES;
+	static bool class_registered = false;
+	if (!class_registered) {
+		INITCOMMONCONTROLSEX icc = {sizeof(icc), ICC_LINK_CLASS};
+		InitCommonControlsEx(&icc);
+
+		WNDCLASSA wc = {0};
+		wc.lpfnWndProc = consent_wnd_proc;
+		wc.hInstance = GetModuleHandleA(NULL);
+		wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+		wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+		wc.lpszClassName = "MWConsentDialog";
+		RegisterClassA(&wc);
+		class_registered = true;
+	}
+
+	HWND hwnd = CreateWindowExA(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST, "MWConsentDialog",
+				    "MW Aufnahme - DSGVO Einwilligung",
+				    WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 500,
+				    470, NULL, NULL, GetModuleHandleA(NULL), NULL);
+
+	ShowWindow(hwnd, SW_SHOW);
+	UpdateWindow(hwnd);
+
+	/* Run modal message loop */
+	MSG m;
+	while (GetMessageA(&m, NULL, 0, 0)) {
+		if (!IsWindow(hwnd))
+			break;
+		TranslateMessage(&m);
+		DispatchMessageA(&m);
+	}
+
+	return g_consent_result;
 }
 #endif
 

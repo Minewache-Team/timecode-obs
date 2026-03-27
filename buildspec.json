@@ -38,7 +38,7 @@
     },
     "name": "obs-ltc-timecode",
     "displayName": "LTC Timecode Generator",
-    "version": "0.3.0",
+    "version": "0.3.1",
     "author": "Ferdmusic",
     "website": "https://github.com/Minewache-Team/timecode-obs",
     "email": "contact.minewache@gmail.com"
