@@ -337,6 +337,7 @@ static LRESULT handle_ctlcolor(HDC hdc, bool is_edit)
 
 #define IDC_CONSENT_YES 2001
 #define IDC_CONSENT_NO 2002
+#define IDC_CONSENT_DSGVO 2003
 
 static bool g_consent_result = false;
 static wchar_t g_consent_server_w[512];
@@ -349,6 +350,7 @@ static LRESULT CALLBACK consent_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LPA
 		HFONT hFont = create_font(14, false);
 		HFONT hFontBold = create_font(16, false);
 		HFONT hTitleFont = create_font(18, true);
+		HFONT hSmallFont = create_font(12, false);
 
 		int y = 20, x = 24, w = 432;
 
@@ -358,49 +360,56 @@ static LRESULT CALLBACK consent_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LPA
 		SendMessageW(title, WM_SETFONT, (WPARAM)hTitleFont, TRUE);
 		y += 40;
 
-		/* Info text with proper Unicode bullets */
-		HWND info = CreateWindowW(L"STATIC",
-					  L"Durch die MW-Aufnahme werden folgende Daten\r\n"
-					  L"an den Server \u00FCbermittelt:\r\n"
-					  L"\r\n"
-					  L"  \u2022  Dein Anzeigename\r\n"
-					  L"  \u2022  Deine Kamera-ID (A\u2013H)\r\n"
-					  L"  \u2022  Aufnahmestatus (online/offline)\r\n"
-					  L"  \u2022  Zeitstempel (Start, Stop, Heartbeat)\r\n"
-					  L"\r\n"
-					  L"NUR der Regisseur kann diese Daten einsehen.\r\n"
-					  L"Es werden KEINE Audio-, Video- oder Bilddaten\r\n"
-					  L"\u00FCbertragen.\r\n"
-					  L"\r\n"
-					  L"Sessions werden nach 30 Tagen automatisch\r\n"
-					  L"gel\u00F6scht. Du kannst deine Einwilligung\r\n"
-					  L"jederzeit widerrufen.",
-					  WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, 240, hwnd, NULL, NULL, NULL);
-		SendMessageW(info, WM_SETFONT, (WPARAM)hFont, TRUE);
-		y += 248;
+		/* Info text block 1: what data is transmitted */
+		HWND info1 = CreateWindowW(L"STATIC",
+					   L"Durch die MW-Aufnahme werden folgende Daten\r\n"
+					   L"an den Server \u00FCbermittelt:\r\n"
+					   L"\r\n"
+					   L"  \u2022  Dein Anzeigename\r\n"
+					   L"  \u2022  Deine Kamera-ID (A\u2013H)\r\n"
+					   L"  \u2022  Aufnahmestatus (online/offline)\r\n"
+					   L"  \u2022  Zeitstempel (Start, Stop, Heartbeat)",
+					   WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, 120, hwnd, NULL, NULL, NULL);
+		SendMessageW(info1, WM_SETFONT, (WPARAM)hFont, TRUE);
+		y += 128;
+
+		/* Info text block 2: privacy assurances */
+		HWND info2 = CreateWindowW(L"STATIC",
+					   L"NUR der Regisseur kann diese Daten einsehen.\r\n"
+					   L"Es werden KEINE Audio-, Video- oder Bilddaten\r\n"
+					   L"\u00FCbertragen.",
+					   WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, 52, hwnd, NULL, NULL, NULL);
+		SendMessageW(info2, WM_SETFONT, (WPARAM)hFont, TRUE);
+		y += 58;
+
+		/* Info text block 3: retention & revocation */
+		HWND info3 = CreateWindowW(L"STATIC",
+					   L"Sessions werden nach 30 Tagen automatisch\r\n"
+					   L"gel\u00F6scht. Du kannst deine Einwilligung\r\n"
+					   L"jederzeit widerrufen.",
+					   WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, 52, hwnd, NULL, NULL, NULL);
+		SendMessageW(info3, WM_SETFONT, (WPARAM)hFont, TRUE);
+		y += 58;
+
+		/* Server info (static text, not link) */
+		wchar_t server_buf[600];
+		_snwprintf(server_buf, 600, L"Server: %ls", g_consent_server_w);
+		HWND serverLabel = CreateWindowW(L"STATIC", server_buf,
+						  WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, 18, hwnd, NULL, NULL, NULL);
+		SendMessageW(serverLabel, WM_SETFONT, (WPARAM)hSmallFont, TRUE);
+		y += 24;
 
 		/* Separator line */
 		CreateWindowW(L"STATIC", NULL, WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ, x, y, w, 2, hwnd, NULL, NULL,
 			      NULL);
-		y += 12;
+		y += 14;
 
-		/* Server link (SysLink needs Unicode) */
-		wchar_t link_buf[700];
-		_snwprintf(link_buf, 700, L"Server: <a href=\"%ls\">%ls</a>", g_consent_server_w,
-			   g_consent_server_w);
-		HWND link1 = CreateWindowW(L"SysLink", link_buf, WS_CHILD | WS_VISIBLE, x, y, w, 22, hwnd, NULL,
-					   NULL, NULL);
-		SendMessageW(link1, WM_SETFONT, (WPARAM)hFont, TRUE);
-		y += 26;
-
-		/* Datenschutz link */
-		wchar_t dsgvo_buf[700];
-		_snwprintf(dsgvo_buf, 700, L"<a href=\"%ls/datenschutz.php\">Datenschutzerkl\u00E4rung \u00F6ffnen</a>",
-			   g_consent_server_w);
-		HWND link2 = CreateWindowW(L"SysLink", dsgvo_buf, WS_CHILD | WS_VISIBLE, x, y, w, 22, hwnd, NULL,
-					   NULL, NULL);
-		SendMessageW(link2, WM_SETFONT, (WPARAM)hFont, TRUE);
-		y += 40;
+		/* Datenschutzerklaerung button */
+		HWND btnDsgvo = CreateWindowW(L"BUTTON", L"Datenschutzerkl\u00E4rung \u00F6ffnen",
+					       WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, x, y, 250, 32, hwnd,
+					       (HMENU)(INT_PTR)IDC_CONSENT_DSGVO, NULL, NULL);
+		SendMessageW(btnDsgvo, WM_SETFONT, (WPARAM)hFont, TRUE);
+		y += 46;
 
 		/* Question */
 		HWND q = CreateWindowW(L"STATIC", L"Bist du damit einverstanden?",
@@ -432,17 +441,13 @@ static LRESULT CALLBACK consent_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LPA
 		return 1;
 	}
 
-	case WM_NOTIFY: {
-		NMHDR *nmhdr = (NMHDR *)lParam;
-		if (nmhdr->code == NM_CLICK || nmhdr->code == NM_RETURN) {
-			NMLINK *link = (NMLINK *)lParam;
-			if (link->item.szUrl[0])
-				ShellExecuteW(NULL, L"open", link->item.szUrl, NULL, NULL, SW_SHOWNORMAL);
-		}
-		return 0;
-	}
-
 	case WM_COMMAND:
+		if (LOWORD(wParam) == IDC_CONSENT_DSGVO) {
+			wchar_t url[600];
+			_snwprintf(url, 600, L"%ls/datenschutz.php", g_consent_server_w);
+			ShellExecuteW(NULL, L"open", url, NULL, NULL, SW_SHOWNORMAL);
+			return 0;
+		}
 		if (LOWORD(wParam) == IDC_CONSENT_YES) {
 			g_consent_result = true;
 			DestroyWindow(hwnd);
@@ -491,7 +496,7 @@ static bool show_consent_dialog(const char *server_url)
 	HWND hwnd = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST, L"MWConsentDialog",
 				    L"MW Aufnahme \u2013 DSGVO Einwilligung",
 				    WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 500,
-				    510, NULL, NULL, GetModuleHandleW(NULL), NULL);
+				    580, NULL, NULL, GetModuleHandleW(NULL), NULL);
 
 	ShowWindow(hwnd, SW_SHOW);
 	UpdateWindow(hwnd);
