@@ -33,6 +33,7 @@
 #include "ltc-encoder-wrapper.h"
 #ifdef ENABLE_FRONTEND_API
 #include "metadata-writer.h"
+#include "mw-recording.h"
 #include <obs-frontend-api.h>
 #include <util/config-file.h>
 #endif
@@ -118,7 +119,7 @@ struct ltc_source_context {
 	int audio_track; /* 1-6, default 3 */
 
 	/* Camera identification for LTC User Bits */
-	int camera_id; /* 0-7 maps to A-H */
+	int camera_id; /* 0-15 maps to A-P */
 
 #ifdef ENABLE_FRONTEND_API
 	/* Metadata sidecar writer */
@@ -569,10 +570,25 @@ static void *ltc_source_create(obs_data_t *settings, obs_source_t *source)
 	if (ctx->sync_interval_sec <= 0)
 		ctx->sync_interval_sec = 300;
 
-	/* Camera ID for LTC User Bits */
+	/* Camera ID for LTC User Bits.
+	 * If not explicitly set in source settings and MW recording has a
+	 * configured camera ID, inherit from MW. Existing sources keep their
+	 * stored value (upgrade-safe). */
+	bool has_cam_setting = obs_data_has_user_value(settings, S_CAMERA_ID);
 	ctx->camera_id = (int)obs_data_get_int(settings, S_CAMERA_ID);
-	if (ctx->camera_id < 0 || ctx->camera_id > 7)
+	if (ctx->camera_id < 0 || ctx->camera_id > 15)
 		ctx->camera_id = 0;
+#ifdef ENABLE_FRONTEND_API
+	if (!has_cam_setting) {
+		int mw_cam = mw_recording_get_camera_id();
+		if (mw_cam >= 0 && mw_cam <= 15) {
+			ctx->camera_id = mw_cam;
+			obs_data_set_int(settings, S_CAMERA_ID, mw_cam);
+		}
+	}
+#else
+	(void)has_cam_setting;
+#endif
 
 	/* Audio track routing */
 	ctx->audio_track = (int)obs_data_get_int(settings, S_AUDIO_TRACK);
@@ -658,8 +674,18 @@ static void ltc_source_update(void *data, obs_data_t *settings)
 
 	/* Camera ID */
 	int new_cam = (int)obs_data_get_int(settings, S_CAMERA_ID);
-	if (new_cam >= 0 && new_cam <= 7)
+	if (new_cam >= 0 && new_cam <= 15) {
+		bool cam_changed = (ctx->camera_id != new_cam);
 		ctx->camera_id = new_cam;
+#ifdef ENABLE_FRONTEND_API
+		/* Sync to MW Aufnahme (propagate_to_ltc=true updates other
+		 * LTC sources; the current source already has the value). */
+		if (cam_changed)
+			mw_recording_set_camera_id(new_cam, true);
+#else
+		(void)cam_changed;
+#endif
+	}
 
 	/* Audio track routing */
 	int new_track = (int)obs_data_get_int(settings, S_AUDIO_TRACK);
@@ -740,18 +766,15 @@ static obs_properties_t *ltc_source_get_properties(void *data)
 	obs_property_list_add_int(interval_prop, "10 min", 600);
 	obs_property_list_add_int(interval_prop, "30 min", 1800);
 
-	/* Camera ID dropdown */
+	/* Camera ID dropdown (A-P, 16 values — fits in LTC user7 4-bit field) */
 	obs_property_t *cam_prop = obs_properties_add_list(
 		props, S_CAMERA_ID, obs_module_text("CameraID"),
 		OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
-	obs_property_list_add_int(cam_prop, "Kamera A", 0);
-	obs_property_list_add_int(cam_prop, "Kamera B", 1);
-	obs_property_list_add_int(cam_prop, "Kamera C", 2);
-	obs_property_list_add_int(cam_prop, "Kamera D", 3);
-	obs_property_list_add_int(cam_prop, "Kamera E", 4);
-	obs_property_list_add_int(cam_prop, "Kamera F", 5);
-	obs_property_list_add_int(cam_prop, "Kamera G", 6);
-	obs_property_list_add_int(cam_prop, "Kamera H", 7);
+	for (int i = 0; i < 16; i++) {
+		char label[16];
+		snprintf(label, sizeof(label), "Kamera %c", 'A' + i);
+		obs_property_list_add_int(cam_prop, label, i);
+	}
 
 	/* Audio track selection */
 	obs_property_t *track_prop = obs_properties_add_list(

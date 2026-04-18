@@ -38,4 +38,17 @@ void mw_recording_init(void);
  */
 void mw_recording_cleanup(void);
 
+/*
+ * Get current MW camera ID (0-15, maps to A-P).
+ * Returns -1 if MW recording is not initialized.
+ */
+int mw_recording_get_camera_id(void);
+
+/*
+ * Set MW camera ID and persist to config.
+ * If propagate_to_ltc is true, also updates all LTC sources.
+ * Value is clamped to 0-15.
+ */
+void mw_recording_set_camera_id(int id, bool propagate_to_ltc);
+
 #endif /* ENABLE_FRONTEND_API */

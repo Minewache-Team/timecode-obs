@@ -122,6 +122,64 @@ static void save_config(void)
 	config_save(config);
 }
 
+/* ---- Camera ID sync with LTC sources ---- */
+
+#define LTC_SOURCE_ID "obs_ltc_timecode_source"
+#define LTC_S_CAMERA_ID "camera_id"
+
+static bool sync_cam_to_ltc_cb(void *data, obs_source_t *source)
+{
+	int id = *(int *)data;
+	if (!source)
+		return true;
+	const char *src_id = obs_source_get_id(source);
+	if (!src_id || strcmp(src_id, LTC_SOURCE_ID) != 0)
+		return true;
+
+	obs_data_t *settings = obs_source_get_settings(source);
+	if (!settings)
+		return true;
+
+	int cur = (int)obs_data_get_int(settings, LTC_S_CAMERA_ID);
+	if (cur != id) {
+		obs_data_set_int(settings, LTC_S_CAMERA_ID, id);
+		obs_source_update(source, settings);
+	}
+	obs_data_release(settings);
+	return true;
+}
+
+int mw_recording_get_camera_id(void)
+{
+	if (!g_initialized)
+		return -1;
+	pthread_mutex_lock(&g_mw.mutex);
+	int id = g_mw.camera_id;
+	pthread_mutex_unlock(&g_mw.mutex);
+	return id;
+}
+
+void mw_recording_set_camera_id(int id, bool propagate_to_ltc)
+{
+	if (!g_initialized)
+		return;
+	if (id < 0) id = 0;
+	if (id > 15) id = 15;
+
+	pthread_mutex_lock(&g_mw.mutex);
+	bool changed = (g_mw.camera_id != id);
+	g_mw.camera_id = id;
+	pthread_mutex_unlock(&g_mw.mutex);
+
+	if (!changed)
+		return;
+
+	save_config();
+
+	if (propagate_to_ltc)
+		obs_enum_sources(sync_cam_to_ltc_cb, &id);
+}
+
 /* ---- curl helpers ---- */
 
 static size_t discard_write(char *ptr, size_t size, size_t nmemb, void *data)
@@ -636,7 +694,7 @@ static LRESULT CALLBACK settings_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LP
 					   WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, edit_x, y, 80,
 					   200, hwnd, (HMENU)(INT_PTR)IDC_CAMERA_ID, NULL, NULL);
 		SendMessageW(combo, WM_SETFONT, (WPARAM)hFont, TRUE);
-		for (int i = 0; i < 8; i++) {
+		for (int i = 0; i < 16; i++) {
 			wchar_t cam[4];
 			cam[0] = L'A' + i;
 			cam[1] = 0;
@@ -718,13 +776,15 @@ static LRESULT CALLBACK settings_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LP
 			GetDlgItemTextW(hwnd, IDC_API_KEY, wbuf, 256);
 			WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, g_mw.api_key, sizeof(g_mw.api_key), NULL, NULL);
 
-			g_mw.camera_id = (int)SendDlgItemMessageW(hwnd, IDC_CAMERA_ID, CB_GETCURSEL, 0, 0);
-			if (g_mw.camera_id < 0)
-				g_mw.camera_id = 0;
+			int new_cam = (int)SendDlgItemMessageW(hwnd, IDC_CAMERA_ID, CB_GETCURSEL, 0, 0);
+			if (new_cam < 0) new_cam = 0;
+			if (new_cam > 15) new_cam = 15;
 			g_mw.enabled = IsDlgButtonChecked(hwnd, IDC_ENABLED) == BST_CHECKED;
 
 			pthread_mutex_unlock(&g_mw.mutex);
 
+			/* Sets camera_id, persists config, syncs to LTC sources */
+			mw_recording_set_camera_id(new_cam, true);
 			save_config();
 			update_status_label(hwnd);
 			obs_log(LOG_INFO, "MW recording settings saved (enabled=%d)", g_mw.enabled);
