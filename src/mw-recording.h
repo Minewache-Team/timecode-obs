@@ -24,6 +24,8 @@
 
 #pragma once
 
+#include <stdbool.h>
+
 #ifdef ENABLE_FRONTEND_API
 
 /*
