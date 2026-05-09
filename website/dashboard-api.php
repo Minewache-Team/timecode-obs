@@ -1,0 +1,160 @@
+<?php
+/**
+ * MW-Aufnahme System - Dashboard API
+ *
+ * AJAX-Endpoints fuer das Dashboard (Session-Auth, nur Regisseur).
+ *   POST ?action=delete_session   - Session/User entfernen (soft-delete)
+ *   POST ?action=force_stop       - Aufnahme erzwungen beenden (online -> offline)
+ *   POST ?action=delete_scene     - Szene loeschen
+ *   GET  ?action=episode_stats    - Statistik pro Folge
+ */
+
+require_once __DIR__ . '/includes/db.php';
+require_dashboard_auth();
+
+$action = $_GET['action'] ?? '';
+
+switch ($action) {
+    case 'delete_session':
+        handle_delete_session();
+        break;
+    case 'force_stop':
+        handle_force_stop();
+        break;
+    case 'delete_scene':
+        handle_delete_scene();
+        break;
+    case 'episode_stats':
+        handle_episode_stats();
+        break;
+    default:
+        json_response(['error' => 'Unknown action'], 400);
+}
+
+function handle_delete_session(): void
+{
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        json_response(['error' => 'Method not allowed'], 405);
+    }
+
+    $input = json_decode(file_get_contents('php://input'), true);
+    $session_id = (int) ($input['session_id'] ?? 0);
+
+    if ($session_id < 1) {
+        json_response(['error' => 'Invalid session_id'], 400);
+    }
+
+    $db = get_db();
+    $stmt = $db->prepare(
+        "UPDATE sessions SET status = 'removed', stopped_at = COALESCE(stopped_at, NOW()) WHERE id = :id"
+    );
+    $stmt->execute([':id' => $session_id]);
+
+    json_response([
+        'ok'      => true,
+        'updated' => $stmt->rowCount(),
+        'message' => 'Session entfernt',
+    ]);
+}
+
+function handle_force_stop(): void
+{
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        json_response(['error' => 'Method not allowed'], 405);
+    }
+
+    $input = json_decode(file_get_contents('php://input'), true);
+    $session_id = (int) ($input['session_id'] ?? 0);
+
+    if ($session_id < 1) {
+        json_response(['error' => 'Invalid session_id'], 400);
+    }
+
+    $db = get_db();
+    $stmt = $db->prepare(
+        "UPDATE sessions SET status = 'offline', stopped_at = NOW()
+         WHERE id = :id AND status = 'online'"
+    );
+    $stmt->execute([':id' => $session_id]);
+
+    json_response([
+        'ok'      => true,
+        'updated' => $stmt->rowCount(),
+        'message' => 'Aufnahme beendet',
+    ]);
+}
+
+function handle_delete_scene(): void
+{
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        json_response(['error' => 'Method not allowed'], 405);
+    }
+
+    $input = json_decode(file_get_contents('php://input'), true);
+    $scene_id = (int) ($input['scene_id'] ?? 0);
+
+    if ($scene_id < 1) {
+        json_response(['error' => 'Invalid scene_id'], 400);
+    }
+
+    $db = get_db();
+    $stmt = $db->prepare("DELETE FROM scenes WHERE id = :id");
+    $stmt->execute([':id' => $scene_id]);
+
+    json_response([
+        'ok'      => true,
+        'deleted' => $stmt->rowCount(),
+        'message' => 'Szene geloescht',
+    ]);
+}
+
+function handle_episode_stats(): void
+{
+    $db = get_db();
+
+    /* Alle Szenen gruppiert nach Staffel+Folge */
+    $stmt = $db->query(
+        "SELECT season, episode, GROUP_CONCAT(session_ids) as all_session_ids,
+                COUNT(*) as scene_count,
+                MIN(started_at) as first_start,
+                MAX(stopped_at) as last_stop
+         FROM scenes
+         GROUP BY season, episode
+         ORDER BY season ASC, episode ASC"
+    );
+    $episodes = $stmt->fetchAll();
+
+    /* Fuer jede Folge: alle beteiligten User aus den Sessions laden */
+    $result = [];
+    foreach ($episodes as $ep) {
+        $all_ids = [];
+        if (!empty($ep['all_session_ids'])) {
+            foreach (explode(',', $ep['all_session_ids']) as $id) {
+                $id = (int) trim($id);
+                if ($id > 0) $all_ids[$id] = true;
+            }
+        }
+
+        $participants = [];
+        if (!empty($all_ids)) {
+            $ids = array_keys($all_ids);
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            $s = $db->prepare(
+                "SELECT DISTINCT user_name, camera_id FROM sessions WHERE id IN ($placeholders)"
+            );
+            $s->execute($ids);
+            $participants = $s->fetchAll();
+        }
+
+        $result[] = [
+            'season'       => (int) $ep['season'],
+            'episode'      => (int) $ep['episode'],
+            'scene_count'  => (int) $ep['scene_count'],
+            'first_start'  => $ep['first_start'],
+            'last_stop'    => $ep['last_stop'],
+            'participants' => $participants,
+        ];
+    }
+
+    json_response(['ok' => true, 'episodes' => $result]);
+}

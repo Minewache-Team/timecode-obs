@@ -25,6 +25,10 @@
 !SYSTEM_PROMPT.md
 !install.ps1
 !install.sh
+!/website
+
+# Credentials — never commit
+/website/includes/config.php
 
 # Exclude lock files
 *.lock.json
