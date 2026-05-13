@@ -26,6 +26,7 @@
 #ifdef ENABLE_FRONTEND_API
 
 #include "mw-recording.h"
+#include "ltc-source.h"
 
 #include <obs-module.h>
 #include <obs-frontend-api.h>
@@ -33,6 +34,7 @@
 #include <util/platform.h>
 #include <util/threading.h>
 #include <util/config-file.h>
+#include <stdint.h>
 
 #include <curl/curl.h>
 #include <string.h>
@@ -46,6 +48,8 @@
 #endif
 
 #define MW_HEARTBEAT_INTERVAL_SEC 30
+#define MW_HEARTBEAT_CHUNK_MS 500 /* poll stop_event every 500ms during sleep */
+#define MW_KICK_COOLDOWN_NS 5000000000ULL /* 5s plugin-side cooldown */
 #define MW_CONFIG_SECTION "mw-recording"
 #define MW_CONFIG_SERVER_URL "server_url"
 #define MW_CONFIG_USER_NAME "user_name"
@@ -182,6 +186,12 @@ void mw_recording_set_camera_id(int id, bool propagate_to_ltc)
 
 /* ---- curl helpers ---- */
 
+struct mw_response_buf {
+	char *buf;
+	size_t cap;
+	size_t len;
+};
+
 static size_t discard_write(char *ptr, size_t size, size_t nmemb, void *data)
 {
 	(void)ptr;
@@ -189,7 +199,30 @@ static size_t discard_write(char *ptr, size_t size, size_t nmemb, void *data)
 	return size * nmemb;
 }
 
-static bool mw_http_post(const char *base_url, const char *url_suffix, const char *api_key, const char *json_body)
+static size_t capture_write(char *ptr, size_t size, size_t nmemb, void *userdata)
+{
+	struct mw_response_buf *r = userdata;
+	size_t bytes = size * nmemb;
+	if (r && r->buf && r->cap > 0) {
+		size_t avail = r->cap - 1 - r->len;
+		size_t to_copy = bytes < avail ? bytes : avail;
+		if (to_copy > 0) {
+			memcpy(r->buf + r->len, ptr, to_copy);
+			r->len += to_copy;
+			r->buf[r->len] = 0;
+		}
+	}
+	/* Always claim full consumption — partial returns make libcurl error. */
+	return bytes;
+}
+
+/*
+ * POST to the MW API. If response_out is non-NULL, captures up to response_max-1
+ * bytes of the response body (null-terminated). Pass NULL/0 to discard.
+ */
+static bool mw_http_post(const char *base_url, const char *url_suffix,
+			 const char *api_key, const char *json_body,
+			 char *response_out, size_t response_max)
 {
 	if (!base_url || !base_url[0])
 		return false;
@@ -208,11 +241,24 @@ static bool mw_http_post(const char *base_url, const char *url_suffix, const cha
 	snprintf(key_header, sizeof(key_header), "X-API-Key: %s", api_key);
 	headers = curl_slist_append(headers, key_header);
 
+	struct mw_response_buf resp = {0};
+	if (response_out && response_max > 0) {
+		response_out[0] = 0;
+		resp.buf = response_out;
+		resp.cap = response_max;
+		resp.len = 0;
+	}
+
 	curl_easy_setopt(curl, CURLOPT_URL, url);
 	curl_easy_setopt(curl, CURLOPT_POST, 1L);
 	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_body);
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, discard_write);
+	if (resp.buf) {
+		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, capture_write);
+		curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
+	} else {
+		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, discard_write);
+	}
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 5000L);
 	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 3000L);
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
@@ -231,7 +277,18 @@ static bool mw_http_post(const char *base_url, const char *url_suffix, const cha
 	return true;
 }
 
-/* ---- Heartbeat thread ---- */
+/* ---- Heartbeat thread ----
+ *
+ * Runs for the entire MW module lifetime (init→cleanup). Sends heartbeats on
+ * every tick when MW is enabled AND consent has been given, regardless of
+ * recording state. The `recording_active` flag in the JSON tells the server
+ * whether it is safe to deliver a queued re-sync command — see TICKET-036.
+ *
+ * Per-message gating means a single thread handles both "during recording"
+ * and "between shoots" cases without lifecycle complications.
+ */
+
+static uint64_t g_last_kick_ns = 0; /* plugin-side resync cooldown */
 
 static void *heartbeat_thread_func(void *data)
 {
@@ -242,23 +299,105 @@ static void *heartbeat_thread_func(void *data)
 		char server[512];
 		char name[100];
 		char key[256];
+		bool enabled, consent, active;
 
 		pthread_mutex_lock(&g_mw.mutex);
 		snprintf(server, sizeof(server), "%s", g_mw.server_url);
 		snprintf(name, sizeof(name), "%s", g_mw.user_name);
 		snprintf(key, sizeof(key), "%s", g_mw.api_key);
-		bool active = g_mw.recording_active;
+		enabled = g_mw.enabled;
+		consent = g_mw.consent_given;
+		active = g_mw.recording_active;
 		pthread_mutex_unlock(&g_mw.mutex);
 
-		if (active && server[0] && name[0]) {
-			char body[256];
-			snprintf(body, sizeof(body), "{\"name\":\"%s\"}", name);
-			mw_http_post(server, "?action=heartbeat", key, body);
-			obs_log(LOG_DEBUG, "MW heartbeat sent for '%s'", name);
+		if (enabled && consent && server[0] && name[0]) {
+			int64_t offset_ms = 0;
+			int sync_method = 0;
+			bool synced = false;
+			bool have_offset = ltc_source_get_current_offset(
+				&offset_ms, &sync_method, &synced);
+
+			char body[384];
+			if (have_offset) {
+				snprintf(body, sizeof(body),
+					 "{\"name\":\"%s\","
+					 "\"recording_active\":%s,"
+					 "\"offset_ms\":%lld,"
+					 "\"sync_method\":%d,"
+					 "\"synced\":%s}",
+					 name, active ? "true" : "false",
+					 (long long)offset_ms, sync_method,
+					 synced ? "true" : "false");
+			} else {
+				snprintf(body, sizeof(body),
+					 "{\"name\":\"%s\","
+					 "\"recording_active\":%s}",
+					 name, active ? "true" : "false");
+			}
+
+			char response[512] = {0};
+			bool ok = mw_http_post(server, "?action=heartbeat",
+					       key, body, response,
+					       sizeof(response));
+
+			if (ok && have_offset) {
+				obs_log(LOG_DEBUG,
+					"MW heartbeat '%s' rec=%d offset=%lldms sync=%d synced=%d",
+					name, active ? 1 : 0,
+					(long long)offset_ms, sync_method,
+					synced ? 1 : 0);
+			} else if (ok) {
+				obs_log(LOG_DEBUG,
+					"MW heartbeat '%s' rec=%d (no LTC source)",
+					name, active ? 1 : 0);
+			}
+
+			/*
+			 * Director-issued re-sync: response carries "resync":true
+			 * only when the server's last recorded state for this
+			 * camera was idle (server-side gating). We still re-check
+			 * recording_active at apply time as defense in depth —
+			 * the camera may have started recording between sending
+			 * the heartbeat and receiving the response.
+			 */
+			if (ok && response[0] &&
+			    strstr(response, "\"resync\":true") != NULL) {
+				pthread_mutex_lock(&g_mw.mutex);
+				bool now_recording = g_mw.recording_active;
+				pthread_mutex_unlock(&g_mw.mutex);
+
+				uint64_t now_ns = os_gettime_ns();
+				if (now_recording) {
+					obs_log(LOG_WARNING,
+						"MW resync refused: recording active (defense in depth) — flag remains queued on server");
+				} else if (now_ns <
+					   g_last_kick_ns + MW_KICK_COOLDOWN_NS) {
+					obs_log(LOG_INFO,
+						"MW resync cooldown active, skipping (last kick %lldns ago)",
+						(long long)(now_ns -
+							    g_last_kick_ns));
+				} else {
+					int n = ltc_source_kick_resync();
+					g_last_kick_ns = now_ns;
+					obs_log(LOG_INFO,
+						"MW resync triggered remotely (%d source(s) kicked)",
+						n);
+				}
+			}
 		}
 
-		if (os_event_timedwait(g_mw.stop_event, MW_HEARTBEAT_INTERVAL_SEC * 1000) == 0)
-			return NULL;
+		/* Sleep up to 30s but wake on stop_event in 500ms chunks. */
+		unsigned long total_ms =
+			(unsigned long)MW_HEARTBEAT_INTERVAL_SEC * 1000UL;
+		unsigned long elapsed_ms = 0;
+		while (elapsed_ms < total_ms) {
+			unsigned long chunk_ms = MW_HEARTBEAT_CHUNK_MS;
+			if (chunk_ms > total_ms - elapsed_ms)
+				chunk_ms = total_ms - elapsed_ms;
+			if (os_event_timedwait(g_mw.stop_event, chunk_ms) == 0)
+				return NULL;
+			elapsed_ms += chunk_ms;
+		}
 	}
 
 	return NULL;
@@ -313,7 +452,7 @@ static void mw_send_start(void)
 
 	char body[512];
 	snprintf(body, sizeof(body), "{\"name\":\"%s\",\"camera_id\":\"%c\"}", name, 'A' + cam);
-	mw_http_post(server, "?action=start", key, body);
+	mw_http_post(server, "?action=start", key, body, NULL, 0);
 	obs_log(LOG_INFO, "MW recording started: '%s' camera %c", name, 'A' + cam);
 }
 
@@ -334,7 +473,7 @@ static void mw_send_stop(void)
 
 	char body[512];
 	snprintf(body, sizeof(body), "{\"name\":\"%s\",\"camera_id\":\"%c\"}", name, 'A' + cam);
-	mw_http_post(server, "?action=stop", key, body);
+	mw_http_post(server, "?action=stop", key, body, NULL, 0);
 	obs_log(LOG_INFO, "MW recording stopped: '%s' camera %c", name, 'A' + cam);
 }
 
@@ -871,7 +1010,7 @@ static bool ensure_consent(void)
 
 		char body[512];
 		snprintf(body, sizeof(body), "{\"name\":\"%s\",\"consent\":true}", name);
-		mw_http_post(server, "?action=consent", key, body);
+		mw_http_post(server, "?action=consent", key, body, NULL, 0);
 
 		obs_log(LOG_INFO, "MW recording: user '%s' gave consent", name);
 		return true;
@@ -910,7 +1049,9 @@ static void on_frontend_event(enum obs_frontend_event event, void *data)
 		pthread_mutex_unlock(&g_mw.mutex);
 
 		mw_send_start();
-		start_heartbeat_thread();
+		/* Heartbeat thread runs for the module's lifetime now —
+		 * no per-recording start/stop. The thread itself reads the
+		 * recording_active flag on each tick (TICKET-036). */
 	}
 
 	if (event == OBS_FRONTEND_EVENT_RECORDING_STOPPED) {
@@ -920,8 +1061,10 @@ static void on_frontend_event(enum obs_frontend_event event, void *data)
 		pthread_mutex_unlock(&g_mw.mutex);
 
 		if (was_active) {
-			stop_heartbeat_thread();
 			mw_send_stop();
+			/* Heartbeat thread keeps running so any queued
+			 * pending_resync flag on the server can be delivered
+			 * via the next (now-idle) heartbeat. */
 		}
 	}
 
@@ -963,6 +1106,12 @@ void mw_recording_init(void)
 
 	obs_frontend_add_tools_menu_item("MW Aufnahme", on_tools_menu_clicked, NULL);
 	obs_frontend_add_event_callback(on_frontend_event, NULL);
+
+	/* Heartbeat thread runs for the entire module lifetime so that director-
+	 * issued re-sync commands can be delivered even between shoots (idle).
+	 * The thread itself gates on enabled/consent/server/name on each tick;
+	 * no transmission happens until those are all set. */
+	start_heartbeat_thread();
 
 	g_initialized = true;
 	obs_log(LOG_INFO, "MW recording initialized (enabled=%d)", g_mw.enabled);

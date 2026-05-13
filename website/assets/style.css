@@ -157,6 +157,39 @@ nav a.active {
     opacity: 0.6;
 }
 
+/* Offset-Warnung: |Drift| > 1s (TICKET-035) — orange Rand, ueberschreibt
+ * den gruenen Rand des Online-Status durch hoehere Spezifitaet. */
+.user-card.online.offset-warn {
+    border-left-color: #ff9800;
+}
+
+.user-card.online.offset-warn .status-dot {
+    background: #ff9800;
+    box-shadow: 0 0 6px #ff9800;
+}
+
+/* Offset-Kritisch: |Drift| > 5s — roter Rand mit Puls */
+.user-card.online.offset-crit {
+    border-left-color: #f44336;
+    animation: offset-pulse 1.4s infinite;
+}
+
+.user-card.online.offset-crit .status-dot {
+    background: #f44336;
+    box-shadow: 0 0 8px #f44336;
+}
+
+@keyframes offset-pulse {
+    0%, 100% { box-shadow: inset 4px 0 0 #f44336; }
+    50%      { box-shadow: inset 4px 0 0 #f44336, 0 0 12px rgba(244, 67, 54, 0.6); }
+}
+
+/* Kleines Label fuer Sync-Methode neben dem Drift-Wert */
+.user-card .sync-label {
+    color: #666;
+    font-size: 0.8em;
+}
+
 .user-card .name {
     font-size: 1.1rem;
     font-weight: bold;
@@ -379,6 +412,47 @@ nav a.active {
 .delete-btn:hover {
     background: #f44336;
     color: #fff;
+}
+
+/* Re-Sync Button (TICKET-036) — drei Zustaende:
+ *   default      = "Resync jetzt"           — User idle, sofort lieferbar
+ *   .resync-queued = "Resync nach Aufnahme"  — User nimmt auf, wird queued
+ *   .disabled    = grau/inaktiv             — Cooldown laeuft oder bereits angefragt
+ */
+.resync-btn {
+    display: block;
+    width: 100%;
+    margin-top: 10px;
+    background: transparent;
+    border: 1px solid #4fc3f7;
+    color: #4fc3f7;
+    font-size: 0.78rem;
+    cursor: pointer;
+    padding: 5px 10px;
+    border-radius: 4px;
+    transition: background 0.2s, color 0.2s, border-color 0.2s, opacity 0.2s;
+    text-align: center;
+}
+
+.resync-btn:hover:not(.disabled):not(:disabled) {
+    background: #4fc3f7;
+    color: #1a1a2e;
+}
+
+.resync-btn.resync-queued {
+    border-color: #ff9800;
+    color: #ff9800;
+}
+
+.resync-btn.resync-queued:hover:not(.disabled):not(:disabled) {
+    background: #ff9800;
+    color: #1a1a2e;
+}
+
+.resync-btn.disabled,
+.resync-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 /* Force-Stop Button auf Online-Karten */

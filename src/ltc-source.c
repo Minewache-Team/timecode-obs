@@ -58,14 +58,6 @@
 #define HTTP_FALLBACK_URL "https://www.google.com"
 #define HTTP_FALLBACK_TIMEOUT_MS 5000
 
-/* Sync method tracking */
-typedef enum {
-	SYNC_METHOD_NONE,
-	SYNC_METHOD_NTP,
-	SYNC_METHOD_HTTP,
-	SYNC_METHOD_LOCAL,
-} sync_method_t;
-
 /* Settings keys */
 #define S_FRAMERATE "framerate"
 #define S_NTP_SERVER "ntp_server"
@@ -96,6 +88,7 @@ struct ltc_source_context {
 	/* NTP sync thread */
 	pthread_t ntp_thread;
 	os_event_t *stop_event;
+	os_event_t *resync_event; /* signalled by ltc_source_kick_resync() */
 	bool thread_created;
 	char ntp_server[256];
 	int sync_interval_sec;
@@ -199,9 +192,33 @@ static void *ntp_sync_thread(void *data)
 			}
 		}
 
-		if (os_event_timedwait(ctx->stop_event,
-				       (unsigned long)ctx->sync_interval_sec * 1000) == 0)
-			return NULL;
+		/*
+		 * Sleep up to sync_interval_sec but wake immediately if either
+		 * stop_event or resync_event fires. Poll in 500ms chunks —
+		 * negligible CPU cost; worst-case 500ms latency on a director-
+		 * issued resync command, which is well within tolerance.
+		 */
+		unsigned long total_ms =
+			(unsigned long)ctx->sync_interval_sec * 1000UL;
+		unsigned long elapsed_ms = 0;
+		while (elapsed_ms < total_ms) {
+			unsigned long chunk_ms = 500;
+			if (chunk_ms > total_ms - elapsed_ms)
+				chunk_ms = total_ms - elapsed_ms;
+
+			if (os_event_timedwait(ctx->stop_event, chunk_ms) == 0)
+				return NULL;
+
+			/* AUTO event: try consumes-and-resets in one shot */
+			if (ctx->resync_event &&
+			    os_event_try(ctx->resync_event) == 0) {
+				obs_log(LOG_INFO,
+					"LTC NTP thread kicked by remote resync");
+				break; /* go around to re-run NTP query */
+			}
+
+			elapsed_ms += chunk_ms;
+		}
 	}
 
 	return NULL;
@@ -214,12 +231,19 @@ static void start_ntp_thread(struct ltc_source_context *ctx)
 
 	if (os_event_init(&ctx->stop_event, OS_EVENT_TYPE_MANUAL) != 0)
 		return;
+	if (os_event_init(&ctx->resync_event, OS_EVENT_TYPE_AUTO) != 0) {
+		os_event_destroy(ctx->stop_event);
+		ctx->stop_event = NULL;
+		return;
+	}
 
 	if (pthread_create(&ctx->ntp_thread, NULL, ntp_sync_thread, ctx) == 0) {
 		ctx->thread_created = true;
 	} else {
 		os_event_destroy(ctx->stop_event);
+		os_event_destroy(ctx->resync_event);
 		ctx->stop_event = NULL;
+		ctx->resync_event = NULL;
 	}
 }
 
@@ -231,6 +255,10 @@ static void stop_ntp_thread(struct ltc_source_context *ctx)
 	os_event_signal(ctx->stop_event);
 	pthread_join(ctx->ntp_thread, NULL);
 	os_event_destroy(ctx->stop_event);
+	if (ctx->resync_event) {
+		os_event_destroy(ctx->resync_event);
+		ctx->resync_event = NULL;
+	}
 	ctx->stop_event = NULL;
 	ctx->thread_created = false;
 }
@@ -857,6 +885,91 @@ static struct obs_source_info ltc_source_info = {
 	.update = ltc_source_update,
 	.video_tick = ltc_source_video_tick,
 };
+
+/* ---- Cross-module accessor: read offset from first LTC source ---- */
+
+struct offset_accessor_state {
+	bool found;
+	int64_t offset_ms;
+	int sync_method;
+	bool synced;
+};
+
+static bool offset_accessor_cb(void *data, obs_source_t *source)
+{
+	struct offset_accessor_state *st = data;
+	if (!source || st->found)
+		return true;
+
+	const char *src_id = obs_source_get_id(source);
+	if (!src_id || strcmp(src_id, "obs_ltc_timecode_source") != 0)
+		return true;
+
+	struct ltc_source_context *ctx =
+		(struct ltc_source_context *)obs_obj_get_data(source);
+	if (!ctx)
+		return true;
+
+	st->offset_ms = ctx->ntp_offset_ms;
+	st->sync_method = (int)ctx->sync_method;
+	st->synced = ctx->ntp_synced;
+	st->found = true;
+	return false; /* stop enumeration */
+}
+
+bool ltc_source_get_current_offset(int64_t *offset_ms, int *sync_method,
+				   bool *synced)
+{
+	struct offset_accessor_state st = {0};
+	obs_enum_sources(offset_accessor_cb, &st);
+
+	if (!st.found) {
+		if (offset_ms)
+			*offset_ms = 0;
+		if (sync_method)
+			*sync_method = (int)SYNC_METHOD_NONE;
+		if (synced)
+			*synced = false;
+		return false;
+	}
+
+	if (offset_ms)
+		*offset_ms = st.offset_ms;
+	if (sync_method)
+		*sync_method = st.sync_method;
+	if (synced)
+		*synced = st.synced;
+	return true;
+}
+
+/* ---- Cross-module trigger: kick every LTC source's NTP thread ---- */
+
+static bool kick_resync_cb(void *data, obs_source_t *source)
+{
+	int *count = data;
+	if (!source)
+		return true;
+
+	const char *src_id = obs_source_get_id(source);
+	if (!src_id || strcmp(src_id, "obs_ltc_timecode_source") != 0)
+		return true;
+
+	struct ltc_source_context *ctx =
+		(struct ltc_source_context *)obs_obj_get_data(source);
+	if (!ctx || !ctx->resync_event)
+		return true;
+
+	os_event_signal(ctx->resync_event);
+	(*count)++;
+	return true;
+}
+
+int ltc_source_kick_resync(void)
+{
+	int count = 0;
+	obs_enum_sources(kick_resync_cb, &count);
+	return count;
+}
 
 void ltc_source_register(void)
 {

@@ -13,6 +13,9 @@
     let eventSource = null;
     let sceneRunning = false;
     let sceneSessionIds = new Set();
+    /* Per-Session Cooldown fuer den Resync-Button (TICKET-036) —
+     * 30s, entspricht dem Heartbeat-Intervall des Plugins. */
+    let resyncCooldown = {};
 
     /* ---- DOM References ---- */
     const userGrid = document.getElementById('user-grid');
@@ -142,11 +145,51 @@
                     : (s.stopped_at ? formatTime(s.stopped_at) : '-');
                 const timeLabel = isOnline ? 'Seit' : 'Gestoppt';
 
+                /* Offset / Sync-Method (TICKET-035) — nur sichtbar bei Online */
+                const offsetMs = (s.offset_ms !== null && s.offset_ms !== undefined && s.offset_ms !== '')
+                    ? parseInt(s.offset_ms, 10) : null;
+                const syncMethod = (s.sync_method !== null && s.sync_method !== undefined && s.sync_method !== '')
+                    ? parseInt(s.sync_method, 10) : null;
+                const offsetCls = (isOnline && offsetMs !== null) ? offsetSeverity(offsetMs) : '';
+                const offsetLine = (isOnline && offsetMs !== null)
+                    ? '<br>Drift: ' + formatOffset(offsetMs)
+                    + (syncMethod ? ' <span class="sync-label">(' + syncMethodLabel(syncMethod) + ')</span>' : '')
+                    : '';
+
                 const stopBtn = isOnline
                     ? '<button class="force-stop-btn" title="Aufnahme erzwungen beenden" onclick="event.stopPropagation();forceStop(' + s.id + ',\'' + escapeHtml(s.user_name).replace(/'/g, "\\'") + '\')">&#9632; Beenden</button>'
                     : '';
 
-                html += '<div class="user-card ' + statusClass + '">'
+                /* Re-Sync-Button (TICKET-036) — drei Zustaende abhaengig
+                 * von Status + last_recording_active. Hard-Resync waehrend
+                 * Aufnahme wuerde den Timecode zerstoeren (TICKET-008), das
+                 * Backend wartet daher bis zum Idle-Heartbeat. */
+                const recActive = parseInt(s.last_recording_active || 0, 10) === 1;
+                const pending = parseInt(s.pending_resync || 0, 10) === 1;
+                let resyncBtn = '';
+                if (isOnline) {
+                    const cooled = resyncCooldown[s.id] && (Date.now() - resyncCooldown[s.id] < 30000);
+                    const label = pending
+                        ? '↻ Resync angefragt'
+                        : (recActive
+                            ? '↻ Resync nach Aufnahme'
+                            : '↻ Resync jetzt');
+                    const cls = 'resync-btn'
+                        + (recActive ? ' resync-queued' : '')
+                        + ((cooled || pending) ? ' disabled' : '');
+                    const disabled = (cooled || pending) ? 'disabled' : '';
+                    const title = recActive
+                        ? 'Resync wird nach Aufnahmestop ausgefuehrt (Hard-Resync waehrend Aufnahme wuerde den Timecode zerstoeren)'
+                        : 'NTP-Resync sofort auf diesem Plugin ausloesen';
+                    resyncBtn = '<button class="' + cls + '" ' + disabled
+                        + ' title="' + title + '"'
+                        + ' onclick="event.stopPropagation();requestResync(' + s.id + ',\'' + escapeHtml(s.user_name).replace(/'/g, "\\'") + '\')">'
+                        + label + '</button>';
+                }
+
+                const cardClass = ('user-card ' + statusClass + (offsetCls ? ' ' + offsetCls : '')).trim();
+
+                html += '<div class="' + cardClass + '">'
                     + '<button class="delete-btn" title="User entfernen" onclick="event.stopPropagation();deleteSession(' + s.id + ',\'' + escapeHtml(s.user_name).replace(/'/g, "\\'") + '\')">&times;</button>'
                     + '<div class="name">'
                     + '<span class="status-dot"></span>'
@@ -156,13 +199,44 @@
                     + 'Kamera ' + escapeHtml(s.camera_id)
                     + ' &middot; ' + statusText
                     + '<br>' + timeLabel + ': ' + timeStr
+                    + offsetLine
                     + '</div>'
+                    + resyncBtn
                     + stopBtn
                     + '</div>';
             });
         }
 
         userGrid.innerHTML = html;
+    }
+
+    /* Offset-Formatierung: ms unter 1s, sonst Sekunden mit 1 Nachkommastelle */
+    function formatOffset(ms) {
+        const abs = Math.abs(ms);
+        if (abs < 1000) return ms + 'ms';
+        const sign = ms < 0 ? '-' : '';
+        return sign + (abs / 1000).toFixed(1) + 's';
+    }
+
+    /* sync_method int -> Label (matches sync_method_t in ltc-source.h) */
+    function syncMethodLabel(m) {
+        switch (m) {
+            case 1: return 'NTP';
+            case 2: return 'HTTP';
+            case 3: return 'Local';
+            default: return '';
+        }
+    }
+
+    /* CSS-Klassen-Mapping:
+     * |offset| <= 1000ms  -> '' (neutral, gruener Rand vom Online-Status)
+     * 1000 < |offset| <= 5000  -> 'offset-warn' (orange)
+     * |offset| > 5000     -> 'offset-crit' (rot + Puls) */
+    function offsetSeverity(ms) {
+        const abs = Math.abs(ms);
+        if (abs > 5000) return 'offset-crit';
+        if (abs > 1000) return 'offset-warn';
+        return '';
     }
 
     /* ---- Scene Modal ---- */
@@ -281,6 +355,33 @@
                 }
             })
             .catch(function () {
+                showToast('Netzwerkfehler', true);
+            });
+    };
+
+    /* ---- Re-Sync (NTP-Resync auf einem Plugin ausloesen) ---- */
+
+    window.requestResync = function (sessionId, userName) {
+        /* Lokaler Cooldown: 30s nach Klick die Schaltflaeche sperren */
+        resyncCooldown[sessionId] = Date.now();
+
+        fetch('dashboard-api.php?action=request_resync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: sessionId }),
+        })
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                if (data.ok) {
+                    showToast(data.message || 'Resync angefragt');
+                } else {
+                    /* Fehler: Cooldown sofort wieder freigeben */
+                    delete resyncCooldown[sessionId];
+                    showToast(data.error || 'Fehler', true);
+                }
+            })
+            .catch(function () {
+                delete resyncCooldown[sessionId];
                 showToast('Netzwerkfehler', true);
             });
     };

@@ -24,13 +24,55 @@
 #define LTC_SOURCE_H
 
 #include <obs-module.h>
+#include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+/* Sync method tracking — wire-compatible int values for JSON payloads. */
+typedef enum {
+	SYNC_METHOD_NONE = 0,
+	SYNC_METHOD_NTP = 1,
+	SYNC_METHOD_HTTP = 2,
+	SYNC_METHOD_LOCAL = 3,
+} sync_method_t;
+
 /* Register the LTC source with OBS */
 void ltc_source_register(void);
+
+/*
+ * Read the current NTP offset from the first LTC source in this OBS instance.
+ *
+ * Outputs (only valid when the call returns true):
+ *   offset_ms    — current smoothed NTP offset in ms
+ *   sync_method  — which sync method last succeeded (cast from sync_method_t)
+ *   synced       — true if at least one sync has ever succeeded
+ *
+ * Returns false (and zeroes the outputs) when no LTC source exists.
+ *
+ * Assumption: at most one LTC source per OBS instance (the Minewache template
+ * ships exactly one). If multiple exist, the first found wins.
+ *
+ * Lock-free read: all backing fields are volatile and atomic-sized on the
+ * target platforms; safe to call from any thread.
+ */
+bool ltc_source_get_current_offset(int64_t *offset_ms,
+				   int *sync_method,
+				   bool *synced);
+
+/*
+ * Trigger an immediate NTP re-query on every LTC source's sync thread.
+ *
+ * Used by the MW recording module to honour a director-issued "re-sync"
+ * command. Caller must have already verified that recording is NOT active —
+ * a hard NTP re-sync during recording causes timecode jumps that break the
+ * DaVinci Resolve sync (see TICKET-008 / TICKET-036 in PROJECT.md).
+ *
+ * Safe to call from any thread. Returns the number of sources kicked.
+ */
+int ltc_source_kick_resync(void);
 
 #ifdef __cplusplus
 }

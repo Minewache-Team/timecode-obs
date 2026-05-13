@@ -75,6 +75,17 @@ function handle_start(array $input): void
 
     $db = get_db();
 
+    /* Pending Resync-Flag der letzten Session uebernehmen (TICKET-036).
+     * Verhindert dass Director-Resync-Anfragen verloren gehen, wenn der
+     * User zwischen Klick und Lieferung eine neue Aufnahme startet. */
+    $stmt = $db->prepare(
+        "SELECT pending_resync FROM sessions
+          WHERE user_name = :name AND status != 'removed'
+          ORDER BY id DESC LIMIT 1"
+    );
+    $stmt->execute([':name' => $name]);
+    $prev_pending = (int) ($stmt->fetchColumn() ?: 0);
+
     /* Falls der User bereits online ist, zuerst alte Session schließen */
     $stmt = $db->prepare(
         "UPDATE sessions SET status = 'offline', stopped_at = NOW()
@@ -82,12 +93,18 @@ function handle_start(array $input): void
     );
     $stmt->execute([':name' => $name]);
 
-    /* Neue Session anlegen */
+    /* Neue Session anlegen — last_recording_active=1, weil eine Aufnahme
+     * gerade startet. Ggf. uebernommenes pending_resync wird beim naechsten
+     * Idle-Heartbeat (nach Stop) ausgeliefert. */
     $stmt = $db->prepare(
-        "INSERT INTO sessions (user_name, camera_id, status, started_at, last_heartbeat)
-         VALUES (:name, :camera, 'online', NOW(), NOW())"
+        "INSERT INTO sessions (user_name, camera_id, status, started_at, last_heartbeat, pending_resync, last_recording_active)
+         VALUES (:name, :camera, 'online', NOW(), NOW(), :pending, 1)"
     );
-    $stmt->execute([':name' => $name, ':camera' => $camera]);
+    $stmt->execute([
+        ':name'    => $name,
+        ':camera'  => $camera,
+        ':pending' => $prev_pending,
+    ]);
 
     json_response([
         'ok'         => true,
@@ -127,17 +144,83 @@ function handle_heartbeat(array $input): void
         json_response(['error' => 'Name is required'], 400);
     }
 
-    $db = get_db();
-    $stmt = $db->prepare(
-        "UPDATE sessions SET last_heartbeat = NOW()
-         WHERE user_name = :name AND status = 'online'"
-    );
-    $stmt->execute([':name' => $name]);
+    /* Offset/Sync-Method aus dem Plugin (TICKET-035).
+     * Beide Felder sind optional fuer Abwaertskompatibilitaet mit alten Plugins. */
+    $offset_ms = null;
+    if (isset($input['offset_ms']) && is_numeric($input['offset_ms'])) {
+        $val = (int) $input['offset_ms'];
+        /* Plausibilitaetsbereich: +/- 1 Tag */
+        if ($val >= -86400000 && $val <= 86400000) {
+            $offset_ms = $val;
+        }
+    }
+    $sync_method = null;
+    if (isset($input['sync_method']) && is_numeric($input['sync_method'])) {
+        $val = (int) $input['sync_method'];
+        if ($val >= 0 && $val <= 3) {
+            $sync_method = $val;
+        }
+    }
 
-    json_response([
-        'ok'      => true,
-        'updated' => $stmt->rowCount(),
+    /* recording_active aus dem Plugin (TICKET-036).
+     * Wenn nicht mitgeschickt (alte Plugins): true annehmen, also keine
+     * idle-Resync-Auslieferung — defensiv. */
+    $recording_active = isset($input['recording_active'])
+        ? (bool) $input['recording_active'] : true;
+
+    $db = get_db();
+
+    /* Update der LATESTEN Session des Users — auch wenn offline.
+     * Das macht Idle-Heartbeats zwischen Aufnahmen sichtbar und gibt uns
+     * einen Kanal um Resync-Kommandos im idle auszuliefern. */
+    $stmt = $db->prepare(
+        "UPDATE sessions
+           SET last_heartbeat        = NOW(),
+               offset_ms             = :offset,
+               sync_method           = :method,
+               last_recording_active = :rec
+         WHERE user_name = :name AND status != 'removed'
+         ORDER BY id DESC
+         LIMIT 1"
+    );
+    $stmt->execute([
+        ':name'   => $name,
+        ':offset' => $offset_ms,
+        ':method' => $sync_method,
+        ':rec'    => $recording_active ? 1 : 0,
     ]);
+    $updated_rows = $stmt->rowCount();
+
+    /* Resync-Kommando nur ausliefern, wenn das Plugin gerade NICHT aufnimmt.
+     * Hard-Resync waehrend Aufnahme wuerde den Timecode zerstoeren — siehe
+     * TICKET-008 Decision Log. Flag bleibt gesetzt bis sicher geliefert. */
+    $deliver_resync = false;
+    if (!$recording_active && $updated_rows > 0) {
+        $stmt = $db->prepare(
+            "SELECT id, pending_resync FROM sessions
+              WHERE user_name = :name AND status != 'removed'
+              ORDER BY id DESC LIMIT 1"
+        );
+        $stmt->execute([':name' => $name]);
+        $row = $stmt->fetch();
+        if ($row && (int) $row['pending_resync'] === 1) {
+            /* Flag loeschen und im Response ausliefern */
+            $clear = $db->prepare(
+                "UPDATE sessions SET pending_resync = 0 WHERE id = :id"
+            );
+            $clear->execute([':id' => $row['id']]);
+            $deliver_resync = true;
+        }
+    }
+
+    $response = [
+        'ok'      => true,
+        'updated' => $updated_rows,
+    ];
+    if ($deliver_resync) {
+        $response['resync'] = true;
+    }
+    json_response($response);
 }
 
 function handle_status(): void
@@ -149,7 +232,9 @@ function handle_status(): void
 
     /* Nur die neueste Session pro User (innerhalb 24h) */
     $stmt = $db->prepare(
-        "SELECT s.id, s.user_name, s.camera_id, s.status, s.started_at, s.stopped_at, s.last_heartbeat
+        "SELECT s.id, s.user_name, s.camera_id, s.status, s.started_at, s.stopped_at,
+                s.last_heartbeat, s.offset_ms, s.sync_method,
+                s.pending_resync, s.last_recording_active
          FROM sessions s
          INNER JOIN (
              SELECT user_name, MAX(id) as max_id

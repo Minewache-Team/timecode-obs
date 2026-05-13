@@ -7,6 +7,7 @@
  *   POST ?action=force_stop       - Aufnahme erzwungen beenden (online -> offline)
  *   POST ?action=delete_scene     - Szene loeschen
  *   GET  ?action=episode_stats    - Statistik pro Folge
+ *   POST ?action=request_resync   - NTP-Resync auf einem Camera-Plugin anfordern
  */
 
 require_once __DIR__ . '/includes/db.php';
@@ -26,6 +27,9 @@ switch ($action) {
         break;
     case 'episode_stats':
         handle_episode_stats();
+        break;
+    case 'request_resync':
+        handle_request_resync();
         break;
     default:
         json_response(['error' => 'Unknown action'], 400);
@@ -105,6 +109,57 @@ function handle_delete_scene(): void
         'ok'      => true,
         'deleted' => $stmt->rowCount(),
         'message' => 'Szene geloescht',
+    ]);
+}
+
+function handle_request_resync(): void
+{
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        json_response(['error' => 'Method not allowed'], 405);
+    }
+
+    $input = json_decode(file_get_contents('php://input'), true);
+    $session_id = (int) ($input['session_id'] ?? 0);
+
+    if ($session_id < 1) {
+        json_response(['error' => 'Invalid session_id'], 400);
+    }
+
+    $db = get_db();
+
+    /* Existiert die Session noch und ist nicht entfernt? */
+    $stmt = $db->prepare(
+        "SELECT user_name, status, last_recording_active FROM sessions
+          WHERE id = :id AND status != 'removed'"
+    );
+    $stmt->execute([':id' => $session_id]);
+    $row = $stmt->fetch();
+    if (!$row) {
+        json_response(['error' => 'Session nicht gefunden'], 404);
+    }
+
+    /* Resync immer auf die LATESTE Session des Users setzen — wenn z.B.
+     * eine neue Aufnahme inzwischen gestartet wurde, soll das Flag auf der
+     * neuen Session liegen. handle_start uebernimmt das Flag bereits beim
+     * Anlegen, aber dies hier ist die robuste Schreibseite. */
+    $stmt = $db->prepare(
+        "UPDATE sessions
+           SET pending_resync = 1
+         WHERE user_name = :name AND status != 'removed'
+         ORDER BY id DESC LIMIT 1"
+    );
+    $stmt->execute([':name' => $row['user_name']]);
+
+    /* Hinweis fuer den Director: Wenn gerade aufgenommen wird, wartet das
+     * System bis zum Idle — kein Sofort-Resync waehrend Aufnahme. */
+    $message = ((int) $row['last_recording_active'] === 1)
+        ? 'Resync angefragt — wird nach Aufnahmestop ausgefuehrt'
+        : 'Resync angefragt — wird beim naechsten Heartbeat ausgefuehrt';
+
+    json_response([
+        'ok'                    => true,
+        'queued_during_recording' => (int) $row['last_recording_active'] === 1,
+        'message'               => $message,
     ]);
 }
 

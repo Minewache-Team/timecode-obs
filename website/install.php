@@ -68,6 +68,23 @@ try {
         $db->exec("ALTER TABLE scenes ADD COLUMN take INT NOT NULL DEFAULT 1 AFTER scene_name");
     } catch (PDOException $e) { /* bereits vorhanden */ }
 
+    /* Epic 15: Offset-Tracking pro Session (TICKET-035) */
+    try {
+        $db->exec("ALTER TABLE sessions ADD COLUMN offset_ms INT NULL AFTER last_heartbeat");
+    } catch (PDOException $e) { /* bereits vorhanden */ }
+    try {
+        $db->exec("ALTER TABLE sessions ADD COLUMN sync_method TINYINT NULL AFTER offset_ms");
+    } catch (PDOException $e) { /* bereits vorhanden */ }
+
+    /* Epic 15: Remote Re-Sync Flags (TICKET-036) — Resync nur ausserhalb
+     * der Aufnahme zulaessig; Flag bleibt gesetzt bis sicher geliefert. */
+    try {
+        $db->exec("ALTER TABLE sessions ADD COLUMN pending_resync TINYINT(1) NOT NULL DEFAULT 0 AFTER sync_method");
+    } catch (PDOException $e) { /* bereits vorhanden */ }
+    try {
+        $db->exec("ALTER TABLE sessions ADD COLUMN last_recording_active TINYINT(1) NOT NULL DEFAULT 0 AFTER pending_resync");
+    } catch (PDOException $e) { /* bereits vorhanden */ }
+
     echo "<h1>Installation erfolgreich!</h1>";
     echo "<p>Alle 3 Tabellen wurden angelegt:</p>";
     echo "<ul>";
