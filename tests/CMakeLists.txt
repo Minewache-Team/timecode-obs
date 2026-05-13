@@ -45,3 +45,8 @@ if(WIN32)
   target_link_libraries(test-http-time PRIVATE ws2_32)
 endif()
 add_test(NAME HTTPTimeTests COMMAND test-http-time)
+
+# --- test-mw-helpers (TICKET-037) ---
+add_executable(test-mw-helpers test-mw-helpers.cpp "${CMAKE_SOURCE_DIR}/src/mw-recording-helpers.c")
+target_link_libraries(test-mw-helpers PRIVATE GTest::gtest_main)
+add_test(NAME MWHelpersTests COMMAND test-mw-helpers)

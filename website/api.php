@@ -12,52 +12,59 @@
 
 require_once __DIR__ . '/includes/db.php';
 
-/* CORS Headers für Preflight */
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    header('Access-Control-Allow-Origin: *');
-    header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
-    header('Access-Control-Allow-Headers: Content-Type, X-API-Key');
-    http_response_code(204);
-    exit;
-}
+/* Dispatch-Logik nur ausfuehren wenn nicht im Test-Modus (TICKET-038).
+ * PHPUnit-Tests setzen MW_TEST_MODE und rufen die handle_*-Funktionen
+ * direkt auf, um die SQL-Vertraege zu pruefen ohne HTTP-Roundtrip. */
+if (!defined('MW_TEST_MODE') || !MW_TEST_MODE) {
 
-$action = $_GET['action'] ?? '';
+    /* CORS Headers für Preflight */
+    if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+        header('Access-Control-Allow-Origin: *');
+        header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+        header('Access-Control-Allow-Headers: Content-Type, X-API-Key');
+        http_response_code(204);
+        exit;
+    }
 
-/* Status-Endpoint braucht keinen API-Key (öffentlich für Dashboard) */
-if ($action === 'status') {
-    handle_status();
-}
+    $action = $_GET['action'] ?? '';
 
-/* Alle anderen Endpoints brauchen API-Key */
-if (!validate_api_key()) {
-    json_response(['error' => 'Unauthorized'], 401);
-}
+    /* Status-Endpoint braucht keinen API-Key (öffentlich für Dashboard) */
+    if ($action === 'status') {
+        handle_status();
+    }
 
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    json_response(['error' => 'Method not allowed'], 405);
-}
+    /* Alle anderen Endpoints brauchen API-Key */
+    if (!validate_api_key()) {
+        json_response(['error' => 'Unauthorized'], 401);
+    }
 
-$input = json_decode(file_get_contents('php://input'), true);
-if (!is_array($input)) {
-    json_response(['error' => 'Invalid JSON body'], 400);
-}
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        json_response(['error' => 'Method not allowed'], 405);
+    }
 
-switch ($action) {
-    case 'start':
-        handle_start($input);
-        break;
-    case 'stop':
-        handle_stop($input);
-        break;
-    case 'heartbeat':
-        handle_heartbeat($input);
-        break;
-    case 'consent':
-        handle_consent($input);
-        break;
-    default:
-        json_response(['error' => 'Unknown action'], 400);
-}
+    $input = json_decode(file_get_contents('php://input'), true);
+    if (!is_array($input)) {
+        json_response(['error' => 'Invalid JSON body'], 400);
+    }
+
+    switch ($action) {
+        case 'start':
+            handle_start($input);
+            break;
+        case 'stop':
+            handle_stop($input);
+            break;
+        case 'heartbeat':
+            handle_heartbeat($input);
+            break;
+        case 'consent':
+            handle_consent($input);
+            break;
+        default:
+            json_response(['error' => 'Unknown action'], 400);
+    }
+
+} /* end !MW_TEST_MODE dispatch */
 
 /* ---- Handlers ---- */
 

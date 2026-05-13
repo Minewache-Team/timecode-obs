@@ -23,12 +23,20 @@
 !README.md
 !PROJECT.md
 !SYSTEM_PROMPT.md
+!CLAUDE.md
 !install.ps1
 !install.sh
 !/website
+!/scripts
+!docker-compose.test.yml
 
 # Credentials — never commit
 /website/includes/config.php
+
+# PHPUnit / Composer Build-Artefakte (TICKET-038).
+# composer.lock IS tracked (application project — reproducible installs).
+/website/vendor/
+/website/.phpunit.cache/
 
 # Exclude lock files
 *.lock.json

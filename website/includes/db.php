@@ -3,7 +3,13 @@
  * MW-Aufnahme System - Datenbankverbindung (PDO)
  */
 
-require_once __DIR__ . '/config.php';
+/* Im Test-Modus laedt bootstrap.php config-test.php bereits VOR diesem
+ * Require — also nicht erneut config.php anziehen wenn die Konstanten
+ * schon definiert sind (config.php ist in Production gitignored, im Test
+ * existiert sie typischerweise nicht). */
+if (!defined('DB_HOST')) {
+    require_once __DIR__ . '/config.php';
+}
 
 function get_db(): PDO
 {
@@ -13,6 +19,7 @@ function get_db(): PDO
     }
 
     $dsn = 'mysql:host=' . DB_HOST
+         . (defined('DB_PORT') ? ';port=' . DB_PORT : '')
          . ';dbname=' . DB_NAME
          . ';charset=' . DB_CHARSET;
 
@@ -20,6 +27,12 @@ function get_db(): PDO
         PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
         PDO::ATTR_EMULATE_PREPARES   => false,
+        /* "Matched rows" Semantik statt "changed rows". Sonst gibt
+         * rowCount() 0 zurueck, wenn ein UPDATE-Statement zwar zeilen
+         * matched aber keine Werte geaendert hat (z.B. idempotenter
+         * Heartbeat). handle_heartbeat() braucht den korrekten Wert um
+         * zu entscheiden ob eine Session ueberhaupt existierte. */
+        PDO::MYSQL_ATTR_FOUND_ROWS   => true,
     ]);
 
     return $pdo;
@@ -56,9 +69,28 @@ function validate_camera_id(string $id): bool
 
 /**
  * Sendet eine JSON-Antwort und beendet das Skript.
+ *
+ * Im Test-Modus (Konstante MW_TEST_MODE definiert) wird stattdessen eine
+ * JsonResponseException geworfen, damit PHPUnit-Tests die Antwort
+ * inspizieren koennen ohne dass exit() den Prozess beendet.
  */
+class JsonResponseException extends \Exception
+{
+    public int $http_status;
+    public array $data;
+    public function __construct(int $status, array $data)
+    {
+        parent::__construct("json_response: HTTP $status");
+        $this->http_status = $status;
+        $this->data = $data;
+    }
+}
+
 function json_response(array $data, int $status = 200): void
 {
+    if (defined('MW_TEST_MODE') && MW_TEST_MODE) {
+        throw new JsonResponseException($status, $data);
+    }
     http_response_code($status);
     header('Content-Type: application/json; charset=utf-8');
     header('Access-Control-Allow-Origin: *');
@@ -72,6 +104,16 @@ function json_response(array $data, int $status = 200): void
  */
 function require_dashboard_auth(): void
 {
+    /* In test mode: erlaubt explizites Setzen der Session-Variable, ohne
+     * dass eine echte PHP-Session gestartet wird. Tests koennen MW_TEST_AUTH
+     * setzen um den Authenticated-Zustand zu simulieren. */
+    if (defined('MW_TEST_MODE') && MW_TEST_MODE) {
+        if (empty($_SESSION['mw_authenticated'])) {
+            throw new JsonResponseException(401, ['error' => 'Unauthorized (test)']);
+        }
+        return;
+    }
+
     if (session_status() === PHP_SESSION_NONE) {
         session_start();
     }

@@ -11,29 +11,33 @@
  */
 
 require_once __DIR__ . '/includes/db.php';
-require_dashboard_auth();
 
-$action = $_GET['action'] ?? '';
+/* Dispatch-Logik nur ausfuehren wenn nicht im Test-Modus (TICKET-038). */
+if (!defined('MW_TEST_MODE') || !MW_TEST_MODE) {
+    require_dashboard_auth();
 
-switch ($action) {
-    case 'delete_session':
-        handle_delete_session();
-        break;
-    case 'force_stop':
-        handle_force_stop();
-        break;
-    case 'delete_scene':
-        handle_delete_scene();
-        break;
-    case 'episode_stats':
-        handle_episode_stats();
-        break;
-    case 'request_resync':
-        handle_request_resync();
-        break;
-    default:
-        json_response(['error' => 'Unknown action'], 400);
-}
+    $action = $_GET['action'] ?? '';
+
+    switch ($action) {
+        case 'delete_session':
+            handle_delete_session();
+            break;
+        case 'force_stop':
+            handle_force_stop();
+            break;
+        case 'delete_scene':
+            handle_delete_scene();
+            break;
+        case 'episode_stats':
+            handle_episode_stats();
+            break;
+        case 'request_resync':
+            handle_request_resync();
+            break;
+        default:
+            json_response(['error' => 'Unknown action'], 400);
+    }
+} /* end !MW_TEST_MODE dispatch */
 
 function handle_delete_session(): void
 {

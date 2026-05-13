@@ -26,6 +26,7 @@
 #ifdef ENABLE_FRONTEND_API
 
 #include "mw-recording.h"
+#include "mw-recording-helpers.h"
 #include "ltc-source.h"
 
 #include <obs-module.h>
@@ -318,22 +319,9 @@ static void *heartbeat_thread_func(void *data)
 				&offset_ms, &sync_method, &synced);
 
 			char body[384];
-			if (have_offset) {
-				snprintf(body, sizeof(body),
-					 "{\"name\":\"%s\","
-					 "\"recording_active\":%s,"
-					 "\"offset_ms\":%lld,"
-					 "\"sync_method\":%d,"
-					 "\"synced\":%s}",
-					 name, active ? "true" : "false",
-					 (long long)offset_ms, sync_method,
-					 synced ? "true" : "false");
-			} else {
-				snprintf(body, sizeof(body),
-					 "{\"name\":\"%s\","
-					 "\"recording_active\":%s}",
-					 name, active ? "true" : "false");
-			}
+			mw_build_heartbeat_body(body, sizeof(body), name,
+						active, have_offset, offset_ms,
+						sync_method, synced);
 
 			char response[512] = {0};
 			bool ok = mw_http_post(server, "?action=heartbeat",
@@ -360,8 +348,7 @@ static void *heartbeat_thread_func(void *data)
 			 * the camera may have started recording between sending
 			 * the heartbeat and receiving the response.
 			 */
-			if (ok && response[0] &&
-			    strstr(response, "\"resync\":true") != NULL) {
+			if (ok && mw_response_has_resync(response)) {
 				pthread_mutex_lock(&g_mw.mutex);
 				bool now_recording = g_mw.recording_active;
 				pthread_mutex_unlock(&g_mw.mutex);
