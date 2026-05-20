@@ -223,3 +223,15 @@ void ntp_corrected_time(int64_t offset_ms, int64_t *out_sec, int64_t *out_usec)
 	if (out_usec)
 		*out_usec = total_usec;
 }
+
+int64_t ntp_slew_step(int64_t applied_ms, int64_t target_ms, int64_t max_step_ms)
+{
+	if (max_step_ms <= 0)
+		return applied_ms;
+	int64_t diff = target_ms - applied_ms;
+	if (diff > max_step_ms)
+		return applied_ms + max_step_ms;
+	if (diff < -max_step_ms)
+		return applied_ms - max_step_ms;
+	return target_ms;
+}

@@ -46,9 +46,15 @@ void ltc_source_register(void);
  * Read the current NTP offset from the first LTC source in this OBS instance.
  *
  * Outputs (only valid when the call returns true):
- *   offset_ms    — current smoothed NTP offset in ms
- *   sync_method  — which sync method last succeeded (cast from sync_method_t)
- *   synced       — true if at least one sync has ever succeeded
+ *   offset_ms        — latest raw NTP offset measurement in ms (same as
+ *                      raw_offset_ms; kept named offset_ms for back-compat
+ *                      with the heartbeat JSON contract).
+ *   sync_method      — which sync method last succeeded (cast from sync_method_t)
+ *   synced           — true if the latest sync attempt succeeded
+ *   raw_offset_ms    — optional; same as offset_ms. Pass NULL if not needed.
+ *   offset_age_sec   — optional; whole seconds since the offset was measured,
+ *                      or -1 if no successful sync has happened yet. Pass NULL
+ *                      if not needed.
  *
  * Returns false (and zeroes the outputs) when no LTC source exists.
  *
@@ -60,7 +66,9 @@ void ltc_source_register(void);
  */
 bool ltc_source_get_current_offset(int64_t *offset_ms,
 				   int *sync_method,
-				   bool *synced);
+				   bool *synced,
+				   int64_t *raw_offset_ms,
+				   int *offset_age_sec);
 
 /*
  * Trigger an immediate NTP re-query on every LTC source's sync thread.

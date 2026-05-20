@@ -30,7 +30,9 @@ int mw_build_heartbeat_body(char *buf, size_t bufsz,
 			    bool have_offset,
 			    int64_t offset_ms,
 			    int sync_method,
-			    bool synced)
+			    bool synced,
+			    int64_t raw_offset_ms,
+			    int offset_age_sec)
 {
 	if (!buf || bufsz == 0)
 		return -1;
@@ -44,12 +46,16 @@ int mw_build_heartbeat_body(char *buf, size_t bufsz,
 			     "\"recording_active\":%s,"
 			     "\"offset_ms\":%lld,"
 			     "\"sync_method\":%d,"
-			     "\"synced\":%s}",
+			     "\"synced\":%s,"
+			     "\"raw_offset_ms\":%lld,"
+			     "\"offset_age_sec\":%d}",
 			     name,
 			     recording_active ? "true" : "false",
 			     (long long)offset_ms,
 			     sync_method,
-			     synced ? "true" : "false");
+			     synced ? "true" : "false",
+			     (long long)raw_offset_ms,
+			     offset_age_sec);
 	} else {
 		n = snprintf(buf, bufsz,
 			     "{\"name\":\"%s\","

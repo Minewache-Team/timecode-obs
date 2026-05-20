@@ -21,8 +21,10 @@
  * Outputs continuous LTC audio via OBS's audio pipeline.
  *
  * Threading model:
- *   - video_tick runs on OBS video thread: reads ntp_offset_ms, uses encoder
- *   - NTP sync thread: writes ntp_offset_ms periodically
+ *   - video_tick runs on OBS video thread: reads ntp_target_offset_ms,
+ *     owns ntp_offset_ms_applied, drives the LTC encoder
+ *   - NTP sync thread: writes ntp_target_offset_ms + raw + age periodically
+ *     and on resync-event wakeup
  *   - update runs on OBS main thread: may recreate encoder (protected by mutex)
  */
 
@@ -52,11 +54,30 @@
 #define MAX_FRAME_SAMPLES 4000 /* max samples per LTC frame (48000/24 = 2000) */
 #define NTP_QUERY_TIMEOUT_MS 2000
 #define NTP_RETRY_COUNT 3
-#define EMA_ALPHA 0.3
-#define RESYNC_CHECK_FRAMES 750 /* check wall clock drift every ~30s at 25fps */
-#define RESYNC_DRIFT_THRESHOLD 2 /* only hard-resync if drift exceeds this many frames */
 #define HTTP_FALLBACK_URL "https://www.google.com"
 #define HTTP_FALLBACK_TIMEOUT_MS 5000
+
+/* Built-in NTP fallbacks: tried in order after the user-configured server.
+ * Both are widely-deployed anycast services that route through different
+ * networks than pool.ntp.org — so if the operator's home router or ISP is
+ * blocking the user-configured server, one of these usually still reaches a
+ * stratum-1 source. */
+static const char *NTP_FALLBACK_SERVERS[] = {
+	"time.cloudflare.com",
+	"time.google.com",
+};
+#define NTP_FALLBACK_COUNT (sizeof(NTP_FALLBACK_SERVERS) / sizeof(NTP_FALLBACK_SERVERS[0]))
+
+/* Slewing: how fast the applied offset chases the latest raw measurement.
+ * 1 ms / encoded LTC frame @ 25 fps = 25 ppm — within hardware LTC generator
+ * tolerance (±50 ppm), so DaVinci Resolve syncs cleanly. 10 ms/frame when no
+ * recording is active gives sub-minute catch-up after a 60 s clock jump. */
+#define SLEW_MS_PER_FRAME_RECORDING 1
+#define SLEW_MS_PER_FRAME_IDLE 10
+
+/* Degraded-state log throttle. First failure logs immediately; further
+ * failures log at most once per 60 s. */
+#define DEGRADED_LOG_INTERVAL_NS (60ULL * 1000000000ULL)
 
 /* Settings keys */
 #define S_FRAMERATE "framerate"
@@ -93,20 +114,37 @@ struct ltc_source_context {
 	char ntp_server[256];
 	int sync_interval_sec;
 
-	/* NTP offset (written by NTP thread, read by video_tick) */
-	volatile int64_t ntp_offset_ms;
+	/* NTP target offset: latest raw measurement from NTP thread.
+	 * Single writer (NTP thread), readers are the encoder + accessors. */
+	volatile int64_t ntp_target_offset_ms;
+
+	/* Applied offset: what encode_next_frame actually uses each frame.
+	 * Single writer (video thread, in encode_next_frame), single reader
+	 * (same thread). Slewed toward ntp_target_offset_ms. */
+	int64_t ntp_offset_ms_applied;
+
+	/* Last raw measurement + when it arrived — exposed to the dashboard
+	 * via the offset accessor so directors see actual sync quality, not
+	 * the slewed value. */
+	volatile int64_t ntp_last_raw_offset_ms;
+	volatile uint64_t ntp_last_sync_ns;
+
 	volatile bool ntp_synced;
 	volatile int64_t ntp_roundtrip_ms;
 	volatile sync_method_t sync_method;
 	bool first_sync_done;
 
+	/* Degradation tracking (NTP thread only) */
+	int consecutive_sync_failures;
+	uint64_t last_degraded_log_ns;
+
+	/* Edge tracking so the encoder can apply target instantly on the first
+	 * frame after the NTP thread recovers from a failure (only when not
+	 * recording — TICKET-036 contract is preserved). */
+	volatile bool ntp_sync_recovered_edge;
+
 	/* Timecode re-sync tracking */
 	uint64_t frames_encoded;
-
-	/* Drift detection: reference point for expected timecode */
-	int64_t sync_ref_sec;   /* wall-clock seconds at last hard sync */
-	int64_t sync_ref_usec;  /* wall-clock microseconds at last hard sync */
-	uint64_t sync_ref_frame; /* frames_encoded at last hard sync */
 
 	/* Audio track routing */
 	int audio_track; /* 1-6, default 3 */
@@ -129,9 +167,15 @@ static void *ntp_sync_thread(void *data)
 
 	os_set_thread_name("ltc-ntp-sync");
 
+	/* Whether this cycle was triggered by the resync_event (director kick)
+	 * versus the regular interval timer. Set in the wait loop below; reset
+	 * here on the very first iteration (timer-driven). */
+	bool cycle_kicked_by_resync = false;
+
 	while (os_event_timedwait(ctx->stop_event, 0) != 0) {
 		ntp_result_t result;
 		bool success = false;
+		sync_method_t method = SYNC_METHOD_NTP;
 
 		/* Copy server name under lock to avoid data race with update */
 		char server_copy[256];
@@ -140,6 +184,7 @@ static void *ntp_sync_thread(void *data)
 			 ctx->ntp_server);
 		pthread_mutex_unlock(&ctx->encoder_mutex);
 
+		/* 1) User-configured NTP server */
 		for (int attempt = 0; attempt < NTP_RETRY_COUNT; attempt++) {
 			if (os_event_try(ctx->stop_event) == 0)
 				return NULL;
@@ -151,45 +196,91 @@ static void *ntp_sync_thread(void *data)
 			}
 		}
 
-		if (success) {
-			if (!ctx->first_sync_done) {
-				ctx->ntp_offset_ms = result.offset_ms;
-				ctx->first_sync_done = true;
-			} else {
-				int64_t old = ctx->ntp_offset_ms;
-				int64_t smoothed = (int64_t)(
-					EMA_ALPHA * (double)result.offset_ms +
-					(1.0 - EMA_ALPHA) * (double)old);
-				ctx->ntp_offset_ms = smoothed;
+		/* 2) Built-in NTP anycast fallbacks */
+		for (size_t s = 0; s < NTP_FALLBACK_COUNT && !success; s++) {
+			const char *fb = NTP_FALLBACK_SERVERS[s];
+			if (strcmp(fb, server_copy) == 0)
+				continue; /* already tried via user-config */
+			for (int attempt = 0; attempt < NTP_RETRY_COUNT;
+			     attempt++) {
+				if (os_event_try(ctx->stop_event) == 0)
+					return NULL;
+				if (ntp_query(fb, NTP_QUERY_TIMEOUT_MS,
+					      &result)) {
+					success = true;
+					obs_log(LOG_INFO,
+						"NTP fallback succeeded via %s (user-server '%s' unreachable)",
+						fb, server_copy);
+					break;
+				}
 			}
-			ctx->ntp_roundtrip_ms = result.roundtrip_ms;
-			ctx->ntp_synced = true;
-			ctx->sync_method = SYNC_METHOD_NTP;
-		} else {
-			/* NTP failed — try HTTP Date header fallback */
+		}
+
+		/* 3) HTTP Date header fallback (last resort with a real source) */
+		if (!success) {
 			http_time_result_t http_result;
 			if (http_time_query(HTTP_FALLBACK_URL,
 					    HTTP_FALLBACK_TIMEOUT_MS,
 					    &http_result)) {
-				if (!ctx->first_sync_done) {
-					ctx->ntp_offset_ms =
-						http_result.offset_ms;
-					ctx->first_sync_done = true;
-				} else {
-					int64_t old = ctx->ntp_offset_ms;
-					int64_t smoothed = (int64_t)(
-						EMA_ALPHA *
-							(double)http_result
-								.offset_ms +
-						(1.0 - EMA_ALPHA) *
-							(double)old);
-					ctx->ntp_offset_ms = smoothed;
-				}
-				ctx->ntp_synced = true;
-				ctx->sync_method = SYNC_METHOD_HTTP;
-			} else {
-				ctx->sync_method = SYNC_METHOD_LOCAL;
+				result.offset_ms = http_result.offset_ms;
+				result.roundtrip_ms = 0;
+				success = true;
+				method = SYNC_METHOD_HTTP;
+				obs_log(LOG_WARNING,
+					"All NTP servers failed; using HTTP Date header fallback (~1s accuracy)");
 			}
+		}
+
+		/* 4) Apply or degrade */
+		if (success) {
+			bool was_degraded =
+				(ctx->consecutive_sync_failures > 0) ||
+				!ctx->ntp_synced;
+			ctx->ntp_target_offset_ms = result.offset_ms;
+			ctx->ntp_last_raw_offset_ms = result.offset_ms;
+			ctx->ntp_last_sync_ns = os_gettime_ns();
+			ctx->ntp_roundtrip_ms = result.roundtrip_ms;
+			ctx->ntp_synced = true;
+			ctx->sync_method = method;
+			ctx->consecutive_sync_failures = 0;
+			if (!ctx->first_sync_done) {
+				ctx->first_sync_done = true;
+				/* Initial sync — encoder will pick this up via
+				 * the !frame_valid path. */
+			} else if (was_degraded || cycle_kicked_by_resync) {
+				/* Recovered from failure OR director-issued
+				 * resync: ask the encoder to apply target
+				 * instantly on the next frame (only honoured
+				 * when not recording — TICKET-036 contract). */
+				ctx->ntp_sync_recovered_edge = true;
+				if (was_degraded)
+					obs_log(LOG_INFO,
+						"Time sync restored via %s",
+						method == SYNC_METHOD_NTP
+							? "NTP"
+							: "HTTP fallback");
+			}
+		} else {
+			ctx->consecutive_sync_failures++;
+			ctx->ntp_synced = false;
+			ctx->sync_method = SYNC_METHOD_LOCAL;
+			uint64_t now_ns = os_gettime_ns();
+			if (ctx->consecutive_sync_failures == 1 ||
+			    now_ns - ctx->last_degraded_log_ns >=
+				    DEGRADED_LOG_INTERVAL_NS) {
+				obs_log(LOG_ERROR,
+					"Time sync UNAVAILABLE — Timecode is drifting on the local clock. "
+					"Tried user='%s', time.cloudflare.com, time.google.com, HTTP Date header. "
+					"Check network/firewall (UDP 123 outbound, HTTPS).",
+					server_copy);
+				ctx->last_degraded_log_ns = now_ns;
+			}
+			/* After 3 consecutive full-chain failures, treat the
+			 * next success as an initial sync so the encoder
+			 * applies the target directly instead of slewing from
+			 * a stale value. */
+			if (ctx->consecutive_sync_failures >= 3)
+				ctx->first_sync_done = false;
 		}
 
 		/*
@@ -201,6 +292,7 @@ static void *ntp_sync_thread(void *data)
 		unsigned long total_ms =
 			(unsigned long)ctx->sync_interval_sec * 1000UL;
 		unsigned long elapsed_ms = 0;
+		cycle_kicked_by_resync = false;
 		while (elapsed_ms < total_ms) {
 			unsigned long chunk_ms = 500;
 			if (chunk_ms > total_ms - elapsed_ms)
@@ -214,6 +306,7 @@ static void *ntp_sync_thread(void *data)
 			    os_event_try(ctx->resync_event) == 0) {
 				obs_log(LOG_INFO,
 					"LTC NTP thread kicked by remote resync");
+				cycle_kicked_by_resync = true;
 				break; /* go around to re-run NTP query */
 			}
 
@@ -379,110 +472,79 @@ static void recreate_encoder(struct ltc_source_context *ctx, tc_framerate_t new_
 /* ---- Audio generation ---- */
 
 /*
- * Calculate the total frame number for a timecode at the given fps.
- * Used for drift comparison (not for display).
+ * Encode one LTC frame.
+ *
+ * Each frame's timecode is recomputed from wall-clock + applied NTP offset.
+ * The applied offset is slewed toward the latest NTP target measurement at
+ * a rate chosen by recording state — small steps during a recording (so the
+ * TC sequence stays monotonic and within hardware LTC generator tolerance),
+ * larger steps when idle (fast catch-up).
+ *
+ * This deliberately calls set_timecode every frame instead of using libltc's
+ * inc_timecode + a periodic drift correction. The earlier approach
+ * (TICKET-008) still permitted a hard-set inside an active recording on
+ * clock perturbations; slewing makes that impossible by design.
  */
-static int64_t tc_to_total_frames(const smpte_timecode_t *tc, int nominal_fps)
-{
-	return (int64_t)tc->hours * 3600 * nominal_fps +
-	       (int64_t)tc->minutes * 60 * nominal_fps +
-	       (int64_t)tc->seconds * nominal_fps +
-	       (int64_t)tc->frames;
-}
-
 static void encode_next_frame(struct ltc_source_context *ctx)
 {
 	if (!ctx->encoder)
 		return;
 
-	/* First frame or encoder was reset: must hard-sync */
-	if (!ctx->frame_valid) {
-		int64_t sec, usec;
-		ntp_corrected_time(ctx->ntp_offset_ms, &sec, &usec);
+	bool initial_sync = (!ctx->frame_valid) || (!ctx->first_sync_done);
 
-		smpte_timecode_t tc;
-		timecode_from_unix(sec, usec, ctx->framerate, &tc);
-		ltc_wrapper_set_timecode(ctx->encoder, tc.hours, tc.minutes,
-					tc.seconds, tc.frames, tc.year,
-					tc.month, tc.day, ctx->camera_id);
-
+	/* On NTP recovery after a failure, when no recording is active, jump
+	 * to the new target instantly (matches the director's expectation
+	 * after clicking "Re-sync now"). TICKET-036 already prevents the
+	 * kick path from delivering a resync while recording, so this only
+	 * fires in safe states. */
+	bool instant_recover = false;
 #ifdef ENABLE_FRONTEND_API
-		{
-			char tc_str[16];
-			timecode_to_string(&tc, tc_str, sizeof(tc_str));
-			metadata_writer_set_timecode(ctx->metadata, tc_str);
-		}
+	if (ctx->ntp_sync_recovered_edge && !obs_frontend_recording_active()) {
+		instant_recover = true;
+	}
+	ctx->ntp_sync_recovered_edge = false;
+#else
+	if (ctx->ntp_sync_recovered_edge)
+		instant_recover = true;
+	ctx->ntp_sync_recovered_edge = false;
 #endif
 
-		/* Store sync reference point */
-		ctx->sync_ref_sec = sec;
-		ctx->sync_ref_usec = usec;
-		ctx->sync_ref_frame = ctx->frames_encoded;
-		goto encode;
-	}
-
-	/* Periodic drift check: compare free-running TC with wall clock */
-	if (ctx->frames_encoded % RESYNC_CHECK_FRAMES == 0) {
-		int64_t sec, usec;
-		ntp_corrected_time(ctx->ntp_offset_ms, &sec, &usec);
-
-		smpte_timecode_t wall_tc;
-		timecode_from_unix(sec, usec, ctx->framerate, &wall_tc);
-		int64_t wall_frames = tc_to_total_frames(&wall_tc,
-							 ctx->nominal_fps);
-
-		/* Calculate where our free-running encoder should be */
-		smpte_timecode_t ref_tc;
-		timecode_from_unix(ctx->sync_ref_sec, ctx->sync_ref_usec,
-				   ctx->framerate, &ref_tc);
-		int64_t ref_frames = tc_to_total_frames(&ref_tc,
-							ctx->nominal_fps);
-		int64_t elapsed = (int64_t)(ctx->frames_encoded -
-					    ctx->sync_ref_frame);
-		int64_t expected_frames = ref_frames + elapsed;
-
-		/* Handle midnight rollover (24h in frames) */
-		int64_t day_frames = (int64_t)24 * 3600 * ctx->nominal_fps;
-		int64_t drift = wall_frames - (expected_frames % day_frames);
-
-		/* Normalize drift to [-day_frames/2, day_frames/2] */
-		if (drift > day_frames / 2)
-			drift -= day_frames;
-		else if (drift < -day_frames / 2)
-			drift += day_frames;
-
-		if (drift < -RESYNC_DRIFT_THRESHOLD ||
-		    drift > RESYNC_DRIFT_THRESHOLD) {
-			/* Drift exceeds threshold: hard resync */
-			obs_log(LOG_WARNING,
-				"LTC timecode drift detected (%lld frames), resyncing",
-				(long long)drift);
-			ltc_wrapper_set_timecode(ctx->encoder,
-						wall_tc.hours,
-						wall_tc.minutes,
-						wall_tc.seconds,
-						wall_tc.frames,
-						wall_tc.year,
-						wall_tc.month,
-						wall_tc.day,
-						ctx->camera_id);
-
-			ctx->sync_ref_sec = sec;
-			ctx->sync_ref_usec = usec;
-			ctx->sync_ref_frame = ctx->frames_encoded;
-		} else {
-			/* Drift within tolerance: continue free-running */
-			ltc_wrapper_inc_timecode(ctx->encoder);
-		}
+	if (initial_sync || instant_recover) {
+		ctx->ntp_offset_ms_applied = ctx->ntp_target_offset_ms;
 	} else {
-		/* Normal operation: increment timecode */
-		ltc_wrapper_inc_timecode(ctx->encoder);
+		int64_t step;
+#ifdef ENABLE_FRONTEND_API
+		step = obs_frontend_recording_active()
+			       ? SLEW_MS_PER_FRAME_RECORDING
+			       : SLEW_MS_PER_FRAME_IDLE;
+#else
+		step = SLEW_MS_PER_FRAME_IDLE;
+#endif
+		ctx->ntp_offset_ms_applied = ntp_slew_step(
+			ctx->ntp_offset_ms_applied,
+			ctx->ntp_target_offset_ms, step);
 	}
 
-encode:
+	int64_t sec, usec;
+	ntp_corrected_time(ctx->ntp_offset_ms_applied, &sec, &usec);
+
+	smpte_timecode_t tc;
+	timecode_from_unix(sec, usec, ctx->framerate, &tc);
+	ltc_wrapper_set_timecode(ctx->encoder, tc.hours, tc.minutes,
+				 tc.seconds, tc.frames, tc.year, tc.month,
+				 tc.day, ctx->camera_id);
+
+#ifdef ENABLE_FRONTEND_API
+	{
+		char tc_str[16];
+		timecode_to_string(&tc, tc_str, sizeof(tc_str));
+		metadata_writer_set_timecode(ctx->metadata, tc_str);
+	}
+#endif
+
 	ctx->frame_samples_total =
 		ltc_wrapper_encode_frame(ctx->encoder, ctx->frame_buf,
-					MAX_FRAME_SAMPLES);
+					 MAX_FRAME_SAMPLES);
 
 	if (ctx->frame_samples_total > 0) {
 		ctx->frame_valid = true;
@@ -572,9 +634,15 @@ static void *ltc_source_create(obs_data_t *settings, obs_source_t *source)
 {
 	struct ltc_source_context *ctx = bzalloc(sizeof(struct ltc_source_context));
 	ctx->source = source;
-	ctx->ntp_offset_ms = 0;
+	ctx->ntp_target_offset_ms = 0;
+	ctx->ntp_offset_ms_applied = 0;
+	ctx->ntp_last_raw_offset_ms = 0;
+	ctx->ntp_last_sync_ns = 0;
 	ctx->ntp_synced = false;
 	ctx->first_sync_done = false;
+	ctx->consecutive_sync_failures = 0;
+	ctx->last_degraded_log_ns = 0;
+	ctx->ntp_sync_recovered_edge = false;
 	ctx->next_audio_ts = 0;
 
 	pthread_mutex_init(&ctx->encoder_mutex, NULL);
@@ -757,7 +825,7 @@ static void ltc_source_update(void *data, obs_data_t *settings)
 		metadata_writer_set_info(ctx->metadata, ctx->camera_id,
 					fps_label, ctx->ntp_server,
 					ctx->ntp_synced,
-					ctx->ntp_offset_ms, sync_str);
+					ctx->ntp_last_raw_offset_ms, sync_str);
 	}
 #endif
 }
@@ -842,6 +910,15 @@ static obs_properties_t *ltc_source_get_properties(void *data)
 	}
 #endif
 
+	/* Degraded-sync banner (only when the NTP chain + HTTP fallback have
+	 * all failed). Shown above the status line so non-technical operators
+	 * can't miss it. */
+	if (ctx && !ctx->ntp_synced && ctx->consecutive_sync_failures > 0) {
+		obs_properties_add_text(props, "_ntp_degraded_warning",
+					obs_module_text("NTPDegradedWarning"),
+					OBS_TEXT_INFO);
+	}
+
 	/* NTP status (informational) */
 	obs_properties_add_text(props, "_ntp_status",
 				obs_module_text("NTPStatus"), OBS_TEXT_INFO);
@@ -849,7 +926,7 @@ static obs_properties_t *ltc_source_get_properties(void *data)
 	/* Current timecode display */
 	if (ctx) {
 		int64_t sec, usec;
-		ntp_corrected_time(ctx->ntp_offset_ms, &sec, &usec);
+		ntp_corrected_time(ctx->ntp_offset_ms_applied, &sec, &usec);
 		smpte_timecode_t tc;
 		char tc_buf[16];
 		timecode_from_unix(sec, usec, ctx->framerate, &tc);
@@ -893,6 +970,8 @@ struct offset_accessor_state {
 	int64_t offset_ms;
 	int sync_method;
 	bool synced;
+	int64_t raw_offset_ms;
+	int offset_age_sec;
 };
 
 static bool offset_accessor_cb(void *data, obs_source_t *source)
@@ -910,15 +989,29 @@ static bool offset_accessor_cb(void *data, obs_source_t *source)
 	if (!ctx)
 		return true;
 
-	st->offset_ms = ctx->ntp_offset_ms;
+	/* Report the latest RAW measurement (not the slewed applied value).
+	 * Directors need to see actual sync quality — slewing only changes
+	 * how fast the encoder absorbs the new measurement, not the
+	 * measurement itself. */
+	st->offset_ms = ctx->ntp_last_raw_offset_ms;
+	st->raw_offset_ms = ctx->ntp_last_raw_offset_ms;
 	st->sync_method = (int)ctx->sync_method;
 	st->synced = ctx->ntp_synced;
+	uint64_t last_ns = ctx->ntp_last_sync_ns;
+	if (last_ns == 0) {
+		st->offset_age_sec = -1; /* never synced */
+	} else {
+		uint64_t now_ns = os_gettime_ns();
+		uint64_t age_ns = (now_ns > last_ns) ? (now_ns - last_ns) : 0;
+		st->offset_age_sec = (int)(age_ns / 1000000000ULL);
+	}
 	st->found = true;
 	return false; /* stop enumeration */
 }
 
 bool ltc_source_get_current_offset(int64_t *offset_ms, int *sync_method,
-				   bool *synced)
+				   bool *synced, int64_t *raw_offset_ms,
+				   int *offset_age_sec)
 {
 	struct offset_accessor_state st = {0};
 	obs_enum_sources(offset_accessor_cb, &st);
@@ -930,6 +1023,10 @@ bool ltc_source_get_current_offset(int64_t *offset_ms, int *sync_method,
 			*sync_method = (int)SYNC_METHOD_NONE;
 		if (synced)
 			*synced = false;
+		if (raw_offset_ms)
+			*raw_offset_ms = 0;
+		if (offset_age_sec)
+			*offset_age_sec = -1;
 		return false;
 	}
 
@@ -939,6 +1036,10 @@ bool ltc_source_get_current_offset(int64_t *offset_ms, int *sync_method,
 		*sync_method = st.sync_method;
 	if (synced)
 		*synced = st.synced;
+	if (raw_offset_ms)
+		*raw_offset_ms = st.raw_offset_ms;
+	if (offset_age_sec)
+		*offset_age_sec = st.offset_age_sec;
 	return true;
 }
 

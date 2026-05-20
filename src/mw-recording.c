@@ -315,13 +315,17 @@ static void *heartbeat_thread_func(void *data)
 			int64_t offset_ms = 0;
 			int sync_method = 0;
 			bool synced = false;
+			int64_t raw_offset_ms = 0;
+			int offset_age_sec = -1;
 			bool have_offset = ltc_source_get_current_offset(
-				&offset_ms, &sync_method, &synced);
+				&offset_ms, &sync_method, &synced,
+				&raw_offset_ms, &offset_age_sec);
 
-			char body[384];
+			char body[512];
 			mw_build_heartbeat_body(body, sizeof(body), name,
 						active, have_offset, offset_ms,
-						sync_method, synced);
+						sync_method, synced,
+						raw_offset_ms, offset_age_sec);
 
 			char response[512] = {0};
 			bool ok = mw_http_post(server, "?action=heartbeat",
@@ -330,10 +334,10 @@ static void *heartbeat_thread_func(void *data)
 
 			if (ok && have_offset) {
 				obs_log(LOG_DEBUG,
-					"MW heartbeat '%s' rec=%d offset=%lldms sync=%d synced=%d",
+					"MW heartbeat '%s' rec=%d offset=%lldms (age %ds) sync=%d synced=%d",
 					name, active ? 1 : 0,
-					(long long)offset_ms, sync_method,
-					synced ? 1 : 0);
+					(long long)offset_ms, offset_age_sec,
+					sync_method, synced ? 1 : 0);
 			} else if (ok) {
 				obs_log(LOG_DEBUG,
 					"MW heartbeat '%s' rec=%d (no LTC source)",
