@@ -64,10 +64,7 @@ void ltc_source_register(void);
  * Lock-free read: all backing fields are volatile and atomic-sized on the
  * target platforms; safe to call from any thread.
  */
-bool ltc_source_get_current_offset(int64_t *offset_ms,
-				   int *sync_method,
-				   bool *synced,
-				   int64_t *raw_offset_ms,
+bool ltc_source_get_current_offset(int64_t *offset_ms, int *sync_method, bool *synced, int64_t *raw_offset_ms,
 				   int *offset_age_sec);
 
 /*

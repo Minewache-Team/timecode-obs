@@ -24,15 +24,8 @@
 #include <stdio.h>
 #include <string.h>
 
-int mw_build_heartbeat_body(char *buf, size_t bufsz,
-			    const char *name,
-			    bool recording_active,
-			    bool have_offset,
-			    int64_t offset_ms,
-			    int sync_method,
-			    bool synced,
-			    int64_t raw_offset_ms,
-			    int offset_age_sec)
+int mw_build_heartbeat_body(char *buf, size_t bufsz, const char *name, bool recording_active, bool have_offset,
+			    int64_t offset_ms, int sync_method, bool synced, int64_t raw_offset_ms, int offset_age_sec)
 {
 	if (!buf || bufsz == 0)
 		return -1;
@@ -49,19 +42,13 @@ int mw_build_heartbeat_body(char *buf, size_t bufsz,
 			     "\"synced\":%s,"
 			     "\"raw_offset_ms\":%lld,"
 			     "\"offset_age_sec\":%d}",
-			     name,
-			     recording_active ? "true" : "false",
-			     (long long)offset_ms,
-			     sync_method,
-			     synced ? "true" : "false",
-			     (long long)raw_offset_ms,
-			     offset_age_sec);
+			     name, recording_active ? "true" : "false", (long long)offset_ms, sync_method,
+			     synced ? "true" : "false", (long long)raw_offset_ms, offset_age_sec);
 	} else {
 		n = snprintf(buf, bufsz,
 			     "{\"name\":\"%s\","
 			     "\"recording_active\":%s}",
-			     name,
-			     recording_active ? "true" : "false");
+			     name, recording_active ? "true" : "false");
 	}
 
 	if (n < 0)
@@ -102,8 +89,7 @@ bool mw_response_has_resync(const char *response_body)
 			/* Make sure it's not "trueish" or similar — next char must
 			 * be a JSON terminator: , } space or end of string. */
 			char next = q[4];
-			if (next == ',' || next == '}' || next == ' ' ||
-			    next == '\t' || next == '\n' || next == '\r' ||
+			if (next == ',' || next == '}' || next == ' ' || next == '\t' || next == '\n' || next == '\r' ||
 			    next == 0)
 				return true;
 		}

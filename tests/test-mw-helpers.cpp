@@ -77,45 +77,36 @@ TEST(BuildHeartbeatBody, RecordingActiveFormattedAsJsonBool)
 	char buf[256];
 
 	mw_build_heartbeat_body(buf, sizeof(buf), "X", true, false, 0, 0, false, 0, 0);
-	EXPECT_NE(std::string(buf).find("\"recording_active\":true"),
-		  std::string::npos);
-	EXPECT_EQ(std::string(buf).find("\"recording_active\":1"),
-		  std::string::npos); /* not numeric */
+	EXPECT_NE(std::string(buf).find("\"recording_active\":true"), std::string::npos);
+	EXPECT_EQ(std::string(buf).find("\"recording_active\":1"), std::string::npos); /* not numeric */
 
 	mw_build_heartbeat_body(buf, sizeof(buf), "X", false, false, 0, 0, false, 0, 0);
-	EXPECT_NE(std::string(buf).find("\"recording_active\":false"),
-		  std::string::npos);
+	EXPECT_NE(std::string(buf).find("\"recording_active\":false"), std::string::npos);
 }
 
 TEST(BuildHeartbeatBody, NegativeOffsetSerializedCorrectly)
 {
 	char buf[256];
-	int n = mw_build_heartbeat_body(buf, sizeof(buf), "Y",
-					true, true, -1234, 2, true, -1234, 0);
+	int n = mw_build_heartbeat_body(buf, sizeof(buf), "Y", true, true, -1234, 2, true, -1234, 0);
 	ASSERT_GT(n, 0);
-	EXPECT_NE(std::string(buf).find("\"offset_ms\":-1234"),
-		  std::string::npos);
-	EXPECT_NE(std::string(buf).find("\"raw_offset_ms\":-1234"),
-		  std::string::npos);
+	EXPECT_NE(std::string(buf).find("\"offset_ms\":-1234"), std::string::npos);
+	EXPECT_NE(std::string(buf).find("\"raw_offset_ms\":-1234"), std::string::npos);
 }
 
 TEST(BuildHeartbeatBody, LargeOffsetSerializedCorrectly)
 {
 	char buf[256];
 	/* 5 minutes drift in ms — close to the worst case seen in the field */
-	int n = mw_build_heartbeat_body(buf, sizeof(buf), "Z",
-					true, true, 300000, 1, true, 300000, 12);
+	int n = mw_build_heartbeat_body(buf, sizeof(buf), "Z", true, true, 300000, 1, true, 300000, 12);
 	ASSERT_GT(n, 0);
-	EXPECT_NE(std::string(buf).find("\"offset_ms\":300000"),
-		  std::string::npos);
+	EXPECT_NE(std::string(buf).find("\"offset_ms\":300000"), std::string::npos);
 }
 
 TEST(BuildHeartbeatBody, AllSyncMethodsRoundtripAsIntegers)
 {
 	char buf[256];
 	for (int m = 0; m <= 3; m++) {
-		mw_build_heartbeat_body(buf, sizeof(buf), "n", true, true,
-					0, m, false, 0, 0);
+		mw_build_heartbeat_body(buf, sizeof(buf), "n", true, true, 0, m, false, 0, 0);
 		std::string expect = "\"sync_method\":" + std::to_string(m);
 		EXPECT_NE(std::string(buf).find(expect), std::string::npos)
 			<< "sync_method " << m << " missing in: " << buf;
@@ -125,9 +116,7 @@ TEST(BuildHeartbeatBody, AllSyncMethodsRoundtripAsIntegers)
 TEST(BuildHeartbeatBody, ReturnsMinusOneOnTruncation)
 {
 	char tiny[8]; /* nowhere near enough */
-	int n = mw_build_heartbeat_body(tiny, sizeof(tiny),
-					"VeryLongUserName", true, true,
-					999999, 1, true, 999999, 0);
+	int n = mw_build_heartbeat_body(tiny, sizeof(tiny), "VeryLongUserName", true, true, 999999, 1, true, 999999, 0);
 	EXPECT_EQ(n, -1);
 }
 
@@ -147,8 +136,7 @@ TEST(BuildHeartbeatBody, ZeroBufSizeRejected)
 TEST(BuildHeartbeatBody, NullNameBecomesEmptyString)
 {
 	char buf[256];
-	int n = mw_build_heartbeat_body(buf, sizeof(buf), nullptr,
-					true, false, 0, 0, false, 0, 0);
+	int n = mw_build_heartbeat_body(buf, sizeof(buf), nullptr, true, false, 0, 0, false, 0, 0);
 	ASSERT_GT(n, 0);
 	EXPECT_NE(std::string(buf).find("\"name\":\"\""), std::string::npos);
 }
@@ -160,8 +148,7 @@ TEST(BuildHeartbeatBody, RawOffsetCanDifferFromSlewedOffset)
 	 * plugin reports raw in both fields, but the helper must not enforce
 	 * equality. */
 	char buf[512];
-	int n = mw_build_heartbeat_body(buf, sizeof(buf), "n",
-					true, true,
+	int n = mw_build_heartbeat_body(buf, sizeof(buf), "n", true, true,
 					/* offset_ms (applied) */ 250,
 					/* sync_method */ 1,
 					/* synced */ true,
@@ -179,22 +166,18 @@ TEST(BuildHeartbeatBody, OffsetAgeSecMinusOneIsValid)
 	/* age = -1 means no sync has succeeded yet — must serialise as -1
 	 * (NOT as a missing key — the dashboard expects the field present). */
 	char buf[256];
-	int n = mw_build_heartbeat_body(buf, sizeof(buf), "n",
-					false, true, 0, 0, false, 0, -1);
+	int n = mw_build_heartbeat_body(buf, sizeof(buf), "n", false, true, 0, 0, false, 0, -1);
 	ASSERT_GT(n, 0);
-	EXPECT_NE(std::string(buf).find("\"offset_age_sec\":-1"),
-		  std::string::npos);
+	EXPECT_NE(std::string(buf).find("\"offset_age_sec\":-1"), std::string::npos);
 }
 
 TEST(BuildHeartbeatBody, OffsetAgeSecZeroBoundary)
 {
 	/* age = 0 (sync less than 1 s ago) must serialise as 0, not omit. */
 	char buf[256];
-	int n = mw_build_heartbeat_body(buf, sizeof(buf), "n",
-					true, true, 42, 1, true, 42, 0);
+	int n = mw_build_heartbeat_body(buf, sizeof(buf), "n", true, true, 42, 1, true, 42, 0);
 	ASSERT_GT(n, 0);
-	EXPECT_NE(std::string(buf).find("\"offset_age_sec\":0"),
-		  std::string::npos);
+	EXPECT_NE(std::string(buf).find("\"offset_age_sec\":0"), std::string::npos);
 }
 
 /* =================================================================
@@ -250,8 +233,7 @@ TEST(ResponseHasResync, NotConfusedByTrueishSuffix)
 TEST(ResponseHasResync, NotConfusedByOtherKeysContainingResync)
 {
 	/* A key called "no_resync_needed" must not trigger */
-	EXPECT_FALSE(mw_response_has_resync(
-		"{\"no_resync_needed\":true,\"ok\":true}"));
+	EXPECT_FALSE(mw_response_has_resync("{\"no_resync_needed\":true,\"ok\":true}"));
 }
 
 TEST(ResponseHasResync, DetectsAtEndOfBufferWithoutBrace)

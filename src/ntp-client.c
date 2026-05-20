@@ -129,8 +129,7 @@ bool ntp_query(const char *server, int timeout_ms, ntp_result_t *result)
 #ifdef _WIN32
 	/* Windows: SO_RCVTIMEO expects a DWORD (milliseconds) */
 	DWORD rcv_timeout = (DWORD)timeout_ms;
-	setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&rcv_timeout,
-		   sizeof(rcv_timeout));
+	setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&rcv_timeout, sizeof(rcv_timeout));
 #else
 	struct timeval tv;
 	tv.tv_sec = timeout_ms / 1000;

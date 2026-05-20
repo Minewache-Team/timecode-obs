@@ -168,8 +168,10 @@ void mw_recording_set_camera_id(int id, bool propagate_to_ltc)
 {
 	if (!g_initialized)
 		return;
-	if (id < 0) id = 0;
-	if (id > 15) id = 15;
+	if (id < 0)
+		id = 0;
+	if (id > 15)
+		id = 15;
 
 	pthread_mutex_lock(&g_mw.mutex);
 	bool changed = (g_mw.camera_id != id);
@@ -221,8 +223,7 @@ static size_t capture_write(char *ptr, size_t size, size_t nmemb, void *userdata
  * POST to the MW API. If response_out is non-NULL, captures up to response_max-1
  * bytes of the response body (null-terminated). Pass NULL/0 to discard.
  */
-static bool mw_http_post(const char *base_url, const char *url_suffix,
-			 const char *api_key, const char *json_body,
+static bool mw_http_post(const char *base_url, const char *url_suffix, const char *api_key, const char *json_body,
 			 char *response_out, size_t response_max)
 {
 	if (!base_url || !base_url[0])
@@ -317,31 +318,22 @@ static void *heartbeat_thread_func(void *data)
 			bool synced = false;
 			int64_t raw_offset_ms = 0;
 			int offset_age_sec = -1;
-			bool have_offset = ltc_source_get_current_offset(
-				&offset_ms, &sync_method, &synced,
-				&raw_offset_ms, &offset_age_sec);
+			bool have_offset = ltc_source_get_current_offset(&offset_ms, &sync_method, &synced,
+									 &raw_offset_ms, &offset_age_sec);
 
 			char body[512];
-			mw_build_heartbeat_body(body, sizeof(body), name,
-						active, have_offset, offset_ms,
-						sync_method, synced,
-						raw_offset_ms, offset_age_sec);
+			mw_build_heartbeat_body(body, sizeof(body), name, active, have_offset, offset_ms, sync_method,
+						synced, raw_offset_ms, offset_age_sec);
 
 			char response[512] = {0};
-			bool ok = mw_http_post(server, "?action=heartbeat",
-					       key, body, response,
-					       sizeof(response));
+			bool ok = mw_http_post(server, "?action=heartbeat", key, body, response, sizeof(response));
 
 			if (ok && have_offset) {
-				obs_log(LOG_DEBUG,
-					"MW heartbeat '%s' rec=%d offset=%lldms (age %ds) sync=%d synced=%d",
-					name, active ? 1 : 0,
-					(long long)offset_ms, offset_age_sec,
-					sync_method, synced ? 1 : 0);
+				obs_log(LOG_DEBUG, "MW heartbeat '%s' rec=%d offset=%lldms (age %ds) sync=%d synced=%d",
+					name, active ? 1 : 0, (long long)offset_ms, offset_age_sec, sync_method,
+					synced ? 1 : 0);
 			} else if (ok) {
-				obs_log(LOG_DEBUG,
-					"MW heartbeat '%s' rec=%d (no LTC source)",
-					name, active ? 1 : 0);
+				obs_log(LOG_DEBUG, "MW heartbeat '%s' rec=%d (no LTC source)", name, active ? 1 : 0);
 			}
 
 			/*
@@ -361,25 +353,19 @@ static void *heartbeat_thread_func(void *data)
 				if (now_recording) {
 					obs_log(LOG_WARNING,
 						"MW resync refused: recording active (defense in depth) — flag remains queued on server");
-				} else if (now_ns <
-					   g_last_kick_ns + MW_KICK_COOLDOWN_NS) {
-					obs_log(LOG_INFO,
-						"MW resync cooldown active, skipping (last kick %lldns ago)",
-						(long long)(now_ns -
-							    g_last_kick_ns));
+				} else if (now_ns < g_last_kick_ns + MW_KICK_COOLDOWN_NS) {
+					obs_log(LOG_INFO, "MW resync cooldown active, skipping (last kick %lldns ago)",
+						(long long)(now_ns - g_last_kick_ns));
 				} else {
 					int n = ltc_source_kick_resync();
 					g_last_kick_ns = now_ns;
-					obs_log(LOG_INFO,
-						"MW resync triggered remotely (%d source(s) kicked)",
-						n);
+					obs_log(LOG_INFO, "MW resync triggered remotely (%d source(s) kicked)", n);
 				}
 			}
 		}
 
 		/* Sleep up to 30s but wake on stop_event in 500ms chunks. */
-		unsigned long total_ms =
-			(unsigned long)MW_HEARTBEAT_INTERVAL_SEC * 1000UL;
+		unsigned long total_ms = (unsigned long)MW_HEARTBEAT_INTERVAL_SEC * 1000UL;
 		unsigned long elapsed_ms = 0;
 		while (elapsed_ms < total_ms) {
 			unsigned long chunk_ms = MW_HEARTBEAT_CHUNK_MS;
@@ -594,8 +580,8 @@ static LRESULT CALLBACK consent_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LPA
 		/* Server info */
 		wchar_t server_buf[600];
 		_snwprintf(server_buf, 600, L"Server: %ls", g_consent_server_w);
-		HWND serverLabel = CreateWindowW(L"STATIC", server_buf,
-						  WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, lh + 2, hwnd, NULL, NULL, NULL);
+		HWND serverLabel = CreateWindowW(L"STATIC", server_buf, WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w,
+						 lh + 2, hwnd, NULL, NULL, NULL);
 		SendMessageW(serverLabel, WM_SETFONT, (WPARAM)hSmallFont, TRUE);
 		y += lh + 10;
 
@@ -606,25 +592,24 @@ static LRESULT CALLBACK consent_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LPA
 
 		/* Datenschutzerklaerung button */
 		HWND btnDsgvo = CreateWindowW(L"BUTTON", L"Datenschutzerkl\u00E4rung \u00F6ffnen",
-					       WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, x, y, 250, 32, hwnd,
-					       (HMENU)(INT_PTR)IDC_CONSENT_DSGVO, NULL, NULL);
+					      WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, x, y, 250, 32, hwnd,
+					      (HMENU)(INT_PTR)IDC_CONSENT_DSGVO, NULL, NULL);
 		SendMessageW(btnDsgvo, WM_SETFONT, (WPARAM)hFont, TRUE);
 		y += 42;
 
 		/* Question */
-		HWND q = CreateWindowW(L"STATIC", L"Bist du damit einverstanden?",
-				       WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, lh + 4, hwnd, NULL, NULL, NULL);
+		HWND q = CreateWindowW(L"STATIC", L"Bist du damit einverstanden?", WS_CHILD | WS_VISIBLE | SS_LEFT, x,
+				       y, w, lh + 4, hwnd, NULL, NULL, NULL);
 		SendMessageW(q, WM_SETFONT, (WPARAM)hFontBold, TRUE);
 		y += lh + 14;
 
 		/* Buttons */
-		HWND btnYes = CreateWindowW(L"BUTTON", L"Ja, einverstanden",
-					    WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, x, y, 160, 38, hwnd,
-					    (HMENU)(INT_PTR)IDC_CONSENT_YES, NULL, NULL);
+		HWND btnYes = CreateWindowW(L"BUTTON", L"Ja, einverstanden", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
+					    x, y, 160, 38, hwnd, (HMENU)(INT_PTR)IDC_CONSENT_YES, NULL, NULL);
 		SendMessageW(btnYes, WM_SETFONT, (WPARAM)hFontBold, TRUE);
 
-		HWND btnNo = CreateWindowW(L"BUTTON", L"Nein, ablehnen", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-					   x + 180, y, 160, 38, hwnd, (HMENU)(INT_PTR)IDC_CONSENT_NO, NULL, NULL);
+		HWND btnNo = CreateWindowW(L"BUTTON", L"Nein, ablehnen", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, x + 180,
+					   y, 160, 38, hwnd, (HMENU)(INT_PTR)IDC_CONSENT_NO, NULL, NULL);
 		SendMessageW(btnNo, WM_SETFONT, (WPARAM)hFont, TRUE);
 
 		/* Resize window to fit all content */
@@ -701,9 +686,8 @@ static bool show_consent_dialog(const char *server_url)
 
 	/* Initial size is a placeholder; WM_CREATE resizes to fit content */
 	HWND hwnd = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST, L"MWConsentDialog",
-				    L"MW Aufnahme \u2013 DSGVO Einwilligung",
-				    WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 500,
-				    600, NULL, NULL, GetModuleHandleW(NULL), NULL);
+				    L"MW Aufnahme \u2013 DSGVO Einwilligung", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+				    CW_USEDEFAULT, CW_USEDEFAULT, 500, 600, NULL, NULL, GetModuleHandleW(NULL), NULL);
 
 	ShowWindow(hwnd, SW_SHOW);
 	UpdateWindow(hwnd);
@@ -765,32 +749,31 @@ static LRESULT CALLBACK settings_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LP
 		int full_w = 440;
 
 		/* Title */
-		HWND title = CreateWindowW(L"STATIC", L"MW Aufnahme", WS_CHILD | WS_VISIBLE | SS_LEFT, lbl_x, y,
-					   full_w, 28, hwnd, NULL, NULL, NULL);
+		HWND title = CreateWindowW(L"STATIC", L"MW Aufnahme", WS_CHILD | WS_VISIBLE | SS_LEFT, lbl_x, y, full_w,
+					   28, hwnd, NULL, NULL, NULL);
 		SendMessageW(title, WM_SETFONT, (WPARAM)hTitleFont, TRUE);
 		y += 32;
 
 		/* Status label */
-		HWND status = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT, lbl_x, y, full_w, 20,
-					    hwnd, (HMENU)(INT_PTR)IDC_STATUS_LABEL, NULL, NULL);
+		HWND status = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT, lbl_x, y, full_w, 20, hwnd,
+					    (HMENU)(INT_PTR)IDC_STATUS_LABEL, NULL, NULL);
 		SendMessageW(status, WM_SETFONT, (WPARAM)hSmallFont, TRUE);
 		y += 30;
 
 		/* Separator */
-		CreateWindowW(L"STATIC", NULL, WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ, lbl_x, y, full_w, 2, hwnd,
-			      NULL, NULL, NULL);
+		CreateWindowW(L"STATIC", NULL, WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ, lbl_x, y, full_w, 2, hwnd, NULL,
+			      NULL, NULL);
 		y += 14;
 
 		/* Enabled checkbox */
-		HWND chk = CreateWindowW(L"BUTTON", L"MW Aufnahme aktivieren",
-					 WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, lbl_x, y, 300, h, hwnd,
-					 (HMENU)(INT_PTR)IDC_ENABLED, NULL, NULL);
+		HWND chk = CreateWindowW(L"BUTTON", L"MW Aufnahme aktivieren", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+					 lbl_x, y, 300, h, hwnd, (HMENU)(INT_PTR)IDC_ENABLED, NULL, NULL);
 		SendMessageW(chk, WM_SETFONT, (WPARAM)hFontBold, TRUE);
 		y += 34;
 
 		/* Server URL */
-		HWND lbl1 = CreateWindowW(L"STATIC", L"Server URL:", WS_CHILD | WS_VISIBLE | SS_LEFT, lbl_x, y + 3,
-					  130, h, hwnd, NULL, NULL, NULL);
+		HWND lbl1 = CreateWindowW(L"STATIC", L"Server URL:", WS_CHILD | WS_VISIBLE | SS_LEFT, lbl_x, y + 3, 130,
+					  h, hwnd, NULL, NULL, NULL);
 		SendMessageW(lbl1, WM_SETFONT, (WPARAM)hFont, TRUE);
 		HWND ed1 = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
 					   edit_x, y, w, h, hwnd, (HMENU)(INT_PTR)IDC_SERVER_URL, NULL, NULL);
@@ -807,22 +790,21 @@ static LRESULT CALLBACK settings_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LP
 		y += 34;
 
 		/* API Key */
-		HWND lbl3 = CreateWindowW(L"STATIC", L"API Key:", WS_CHILD | WS_VISIBLE | SS_LEFT, lbl_x, y + 3, 130,
-					  h, hwnd, NULL, NULL, NULL);
+		HWND lbl3 = CreateWindowW(L"STATIC", L"API Key:", WS_CHILD | WS_VISIBLE | SS_LEFT, lbl_x, y + 3, 130, h,
+					  hwnd, NULL, NULL, NULL);
 		SendMessageW(lbl3, WM_SETFONT, (WPARAM)hFont, TRUE);
 		HWND ed3 = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
-					   WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_PASSWORD, edit_x, y, w, h,
-					   hwnd, (HMENU)(INT_PTR)IDC_API_KEY, NULL, NULL);
+					   WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_PASSWORD, edit_x, y, w, h, hwnd,
+					   (HMENU)(INT_PTR)IDC_API_KEY, NULL, NULL);
 		SendMessageW(ed3, WM_SETFONT, (WPARAM)hFont, TRUE);
 		y += 34;
 
 		/* Camera ID */
-		HWND lbl4 = CreateWindowW(L"STATIC", L"Kamera:", WS_CHILD | WS_VISIBLE | SS_LEFT, lbl_x, y + 3, 130,
-					  h, hwnd, NULL, NULL, NULL);
+		HWND lbl4 = CreateWindowW(L"STATIC", L"Kamera:", WS_CHILD | WS_VISIBLE | SS_LEFT, lbl_x, y + 3, 130, h,
+					  hwnd, NULL, NULL, NULL);
 		SendMessageW(lbl4, WM_SETFONT, (WPARAM)hFont, TRUE);
-		HWND combo = CreateWindowW(L"COMBOBOX", L"",
-					   WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, edit_x, y, 80,
-					   200, hwnd, (HMENU)(INT_PTR)IDC_CAMERA_ID, NULL, NULL);
+		HWND combo = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
+					   edit_x, y, 80, 200, hwnd, (HMENU)(INT_PTR)IDC_CAMERA_ID, NULL, NULL);
 		SendMessageW(combo, WM_SETFONT, (WPARAM)hFont, TRUE);
 		for (int i = 0; i < 16; i++) {
 			wchar_t cam[4];
@@ -833,8 +815,8 @@ static LRESULT CALLBACK settings_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LP
 		y += 44;
 
 		/* Separator */
-		CreateWindowW(L"STATIC", NULL, WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ, lbl_x, y, full_w, 2, hwnd,
-			      NULL, NULL, NULL);
+		CreateWindowW(L"STATIC", NULL, WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ, lbl_x, y, full_w, 2, hwnd, NULL,
+			      NULL, NULL);
 		y += 14;
 
 		/* Buttons */
@@ -842,9 +824,8 @@ static LRESULT CALLBACK settings_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LP
 					 130, 34, hwnd, (HMENU)(INT_PTR)IDC_SAVE, NULL, NULL);
 		SendMessageW(btn, WM_SETFONT, (WPARAM)hFontBold, TRUE);
 
-		HWND btn2 = CreateWindowW(L"BUTTON", L"DSGVO zur\u00FCcksetzen",
-					  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, lbl_x + 145, y, 170, 34, hwnd,
-					  (HMENU)(INT_PTR)IDC_RESET_CONSENT, NULL, NULL);
+		HWND btn2 = CreateWindowW(L"BUTTON", L"DSGVO zur\u00FCcksetzen", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+					  lbl_x + 145, y, 170, 34, hwnd, (HMENU)(INT_PTR)IDC_RESET_CONSENT, NULL, NULL);
 		SendMessageW(btn2, WM_SETFONT, (WPARAM)hFont, TRUE);
 
 		/* Populate fields from config */
@@ -896,19 +877,19 @@ static LRESULT CALLBACK settings_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LP
 			pthread_mutex_lock(&g_mw.mutex);
 
 			GetDlgItemTextW(hwnd, IDC_SERVER_URL, wbuf, 512);
-			WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, g_mw.server_url, sizeof(g_mw.server_url), NULL,
-					    NULL);
+			WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, g_mw.server_url, sizeof(g_mw.server_url), NULL, NULL);
 
 			GetDlgItemTextW(hwnd, IDC_USER_NAME, wbuf, 100);
-			WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, g_mw.user_name, sizeof(g_mw.user_name), NULL,
-					    NULL);
+			WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, g_mw.user_name, sizeof(g_mw.user_name), NULL, NULL);
 
 			GetDlgItemTextW(hwnd, IDC_API_KEY, wbuf, 256);
 			WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, g_mw.api_key, sizeof(g_mw.api_key), NULL, NULL);
 
 			int new_cam = (int)SendDlgItemMessageW(hwnd, IDC_CAMERA_ID, CB_GETCURSEL, 0, 0);
-			if (new_cam < 0) new_cam = 0;
-			if (new_cam > 15) new_cam = 15;
+			if (new_cam < 0)
+				new_cam = 0;
+			if (new_cam > 15)
+				new_cam = 15;
 			g_mw.enabled = IsDlgButtonChecked(hwnd, IDC_ENABLED) == BST_CHECKED;
 
 			pthread_mutex_unlock(&g_mw.mutex);
@@ -970,8 +951,8 @@ static void open_settings_dialog(void)
 	}
 
 	g_settings_hwnd = CreateWindowExW(WS_EX_DLGMODALFRAME, L"MWRecordingSettings", L"MW Aufnahme",
-					  WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT,
-					  500, 420, NULL, NULL, GetModuleHandleW(NULL), NULL);
+					  WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 500,
+					  420, NULL, NULL, GetModuleHandleW(NULL), NULL);
 
 	ShowWindow(g_settings_hwnd, SW_SHOW);
 	UpdateWindow(g_settings_hwnd);
