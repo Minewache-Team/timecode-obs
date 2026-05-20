@@ -40,7 +40,7 @@ extern "C" {
  * website/api.php handle_heartbeat() — this is the contract.
  *
  *   {"name":"<n>","recording_active":<bool>}
- *   {"name":"<n>","recording_active":<bool>,"offset_ms":<i64>,"sync_method":<int>,"synced":<bool>}
+ *   {"name":"<n>","recording_active":<bool>,"offset_ms":<i64>,"sync_method":<int>,"synced":<bool>,"raw_offset_ms":<i64>,"offset_age_sec":<int>}
  *
  * Notes:
  *   - `name` is inserted verbatim — the caller is responsible for any escaping.
@@ -48,6 +48,13 @@ extern "C" {
  *     sanitized server-side (PHP `sanitize_name`), so we mirror that boundary.
  *   - When `have_offset == false`, the offset fields are omitted entirely
  *     (old plugins talking to new servers get sensible defaults).
+ *   - `raw_offset_ms` mirrors `offset_ms` today (both report the latest raw
+ *     measurement); the field is kept distinct so a future dashboard can
+ *     visualise the slewed/applied value separately without another wire
+ *     change.
+ *   - `offset_age_sec` is whole seconds since the last successful sync, or
+ *     -1 if no sync has happened yet. Helpful for the dashboard to render
+ *     "vor 23 s" / staleness colour-coding.
  *
  * Returns the number of characters written (excluding the null terminator),
  * or -1 on truncation/error. Buf is always null-terminated when bufsz > 0.
@@ -58,7 +65,9 @@ int mw_build_heartbeat_body(char *buf, size_t bufsz,
 			    bool have_offset,
 			    int64_t offset_ms,
 			    int sync_method,
-			    bool synced);
+			    bool synced,
+			    int64_t raw_offset_ms,
+			    int offset_age_sec);
 
 /*
  * Detect a director-issued re-sync command in the API response.

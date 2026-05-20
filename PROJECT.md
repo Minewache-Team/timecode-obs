@@ -828,6 +828,83 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 ---
 
+### Epic 17: NTP Robustness & Drift Recovery Hardening
+
+> User feedback (2026-05-20): Two field reports — (1) per-camera TC drifted >2
+> minutes despite Epic 15 visibility, (2) "Re-sync now" button had ~30% effect
+> per click. Diagnosis: single-NTP-server failure mode + silent fallback to
+> stale local clock + EMA-smoothing applied to every measurement (so the
+> resync_event kick was also smoothed) + drift-aware hard-resync still
+> permitted inside recordings.
+
+#### TICKET-040: NTP fallback chain + degraded warning + slewing
+- **Status:** `DONE`
+- **Depends on:** TICKET-003, TICKET-006, TICKET-008, TICKET-018, TICKET-036, TICKET-037
+- **Type:** Bug / Architecture
+- **Description:** Three independently valuable changes shipped together:
+  1. **NTP fallback chain.** `ntp_sync_thread` now tries the user-configured
+     server, then `time.cloudflare.com`, then `time.google.com`, then HTTP
+     Date header, before degrading. Each NTP step keeps `NTP_RETRY_COUNT=3`
+     and 2 s per attempt — worst-case ~30 s per cycle, well under the 60 s
+     minimum sync interval.
+  2. **Loud degradation warning.** When the whole chain fails:
+     `ntp_synced = false` (was silently kept `true` before),
+     `consecutive_sync_failures` counted, `LOG_ERROR` once per transition +
+     every 60 s while degraded, Properties UI red banner
+     (`NTPDegradedWarning`). After 3 consecutive failures
+     `first_sync_done` resets so the next success treats it as a fresh
+     initial sync (no slewing from a stale value).
+  3. **Slewing replaces EMA + drift-detection hard-resync.** New context
+     fields `ntp_target_offset_ms` (raw from NTP thread, no EMA),
+     `ntp_offset_ms_applied` (video-thread-owned), `ntp_last_raw_offset_ms`,
+     `ntp_last_sync_ns`. `encode_next_frame` slews applied → target by ≤
+     1 ms/frame during recording (~25 ppm @ 25 fps) or ≤ 10 ms/frame when
+     idle, and `ltc_wrapper_set_timecode`s every frame from wall+applied.
+     Deleted: `tc_to_total_frames`, `sync_ref_*`, `RESYNC_CHECK_FRAMES`,
+     `RESYNC_DRIFT_THRESHOLD`, `EMA_ALPHA`, the inc_timecode + drift-check
+     branches. On idle NTP recovery the encoder applies target instantly
+     (matches director expectation after clicking "Re-sync now");
+     TICKET-036 server- and plugin-side gating during recording is
+     untouched. Pure helper `ntp_slew_step()` added in `ntp-client.c`
+     (testable without OBS).
+  4. Heartbeat JSON additively carries `raw_offset_ms` + `offset_age_sec`
+     so a future dashboard can show actual measurement quality + staleness.
+     Plugin emits them now; dashboard UI deferred to TICKET-041.
+- **Acceptance Criteria:**
+  - [x] NTP chain tries user-server → cloudflare → google → HTTP Date.
+  - [x] Dual NTP+HTTP failure sets `ntp_synced = false` (no silent stale offset).
+  - [x] `LOG_ERROR` on first failure, then rate-limited to 60 s.
+  - [x] `NTPDegradedWarning` banner appears in Properties when degraded.
+  - [x] `ntp_slew_step()` pure helper with ≥6 unit tests.
+  - [x] `encode_next_frame` calls `ltc_wrapper_set_timecode` every frame; no
+        `inc_timecode` path remains; no hard-resync inside active recording.
+  - [x] On idle NTP recovery (`!obs_frontend_recording_active()`), applied
+        jumps directly to target. While recording, slewing continues.
+  - [x] `offset_accessor_cb` returns RAW offset + age, not the slewed value
+        (so the dashboard reflects actual measurements).
+  - [x] Heartbeat JSON additively gains `raw_offset_ms` + `offset_age_sec`.
+  - [x] All existing ctest suites still pass; new tests cover slew step
+        + extended JSON shape.
+- **Files:** `src/ltc-source.{c,h}`, `src/ntp-client.{c,h}`,
+  `src/mw-recording-helpers.{c,h}`, `src/mw-recording.c`,
+  `tests/test-ntp-offset.cpp`, `tests/test-mw-helpers.cpp`,
+  `data/locale/en-US.ini`.
+
+#### TICKET-041: Dashboard surfaces raw offset + age (follow-up)
+- **Status:** `TODO`
+- **Depends on:** TICKET-040
+- **Type:** Enhancement
+- **Description:** Website UI for the new heartbeat fields `raw_offset_ms` +
+  `offset_age_sec`. Plugin emits them additively as of TICKET-040; this
+  ticket wires them through `install.php` (schema), `api.php`
+  (handle_heartbeat persistence), `sse.php` (feed), `app.js renderUserCards`
+  (display: e.g. *"Drift 47 ms · vor 23 s"*), `style.css` (staleness colour
+  if age > 90 s).
+- **Files:** `website/install.php`, `website/api.php`, `website/sse.php`,
+  `website/assets/app.js`, `website/assets/style.css`.
+
+---
+
 ## Decision Log
 
 | Date | Ticket | Decision | Rationale | Alternatives Considered |
@@ -879,6 +956,10 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 | 2026-05-13 | TICKET-039 | Smoke scripts seed `pending_resync` via a CLI-only PHP helper, not a hidden HTTP endpoint | Setting the flag is privileged (normally requires director auth + session_id). A test-only HTTP endpoint would be a permanent risk if it ever got deployed; a CLI helper that refuses `PHP_SAPI !== 'cli'` cannot be invoked over the network at all. | Hidden HTTP endpoint behind a header (deployment risk), test-only branch of `request_resync` that skips auth (same deployment risk, harder to spot), direct SQL via mysql CLI in the script (requires mysql binary on PATH — bash and PowerShell would need separate paths) |
 | 2026-05-13 | Epic 16 CI | Use real MariaDB (Docker / GitHub service container) for tests, NOT SQLite | Schema and queries use ENUM, ENGINE=InnoDB, NOW(), DATE_SUB(NOW(), INTERVAL ...), UPDATE...ORDER BY id DESC LIMIT 1, SET FOREIGN_KEY_CHECKS=0, TRUNCATE TABLE — all MySQL/MariaDB dialect. SQLite would require either translation shims or dual SQL paths; either masks the very kind of bug we want CI to catch (dialect/schema mismatches between test and prod). Docker mariadb:11 is one image, same in CI service container and `docker-compose.test.yml` for local dev. | SQLite via dialect translation (hides dialect bugs), in-memory MySQL forks like MySQL Server Lite (immature, not in CI presets), Postgres (would require porting all DDL, no benefit) |
 | 2026-05-13 | Epic 16 CI | Test MariaDB on port 3307, not 3306 | A developer running the test container while also running a production-like MySQL locally would otherwise either fail to start or — worse — silently connect to the wrong DB. Port 3307 makes the test instance unambiguous. `config-test.php` defaults to it, both CI workflows and `docker-compose.test.yml` agree. | Reuse 3306 (collision risk), random port per run (forces test scripts to read it from somewhere) |
+| 2026-05-20 | TICKET-040 | NTP chain: user → time.cloudflare.com → time.google.com → HTTP Date | Single-NTP-server failure was the most likely cause of multi-minute drifts in field. Cloudflare + Google anycast are the two highest-uptime free NTP services and route through different networks than pool.ntp.org. Bounded ~30 s worst-case per cycle (3 servers × 3 retries × 2 s + 5 s HTTP) — well under the 60 s minimum sync interval. | Single configurable server (current — fails when that server is firewalled), full pool.ntp.org rotation per cycle (no failure-isolation), let users edit a server list (UX friction, most operators don't know what to put), drop pool.ntp.org default for Cloudflare (changes behaviour silently for existing installs). |
+| 2026-05-20 | TICKET-040 | Slewing replaces EMA + drift-detection hard-resync | EMA: slow geometric convergence (~55 min for 50 s drift @ 5-min interval); `resync_event` kick still smoothed → director button had ~30% effect per click. Drift-aware hard-resync (TICKET-008) still permits TC discontinuities on clock perturbations. Slewing decouples target (raw NTP, instant) from applied (slow follow), keeping TC monotonic. 1 ms/frame @ 25 fps = 25 ppm = within hardware LTC generator tolerance. Kick bypasses slew when not recording (instant), still refused during recording (TICKET-036 server- and plugin-side gating untouched). | (a) Outlier-bypass EMA — still triggers hard-resyncs; (b) Larger drift threshold — postpones the problem; (c) Audio-resample slew — much larger eng cost, libltc-state manipulation. |
+| 2026-05-20 | TICKET-040 | Silent local-clock degradation fixed: dual NTP+HTTP failure sets `ntp_synced=false` | Previously `sync_method=LOCAL` was set but `ntp_synced` stayed `true` and `ntp_offset_ms` stayed stale. Heartbeat reported green while the OS clock drifted — the most likely root cause of multi-minute field drifts. Now: synced=false on failure, `consecutive_sync_failures` counter, LOG_ERROR on transition + every 60 s while degraded, Properties UI red banner, dashboard auto-colour-codes (Epic 15 already handles synced=false). After 3 failures `first_sync_done` resets so the next success acts as a fresh initial sync. | Keep silent fallback (current bug — invisible drift), modal dialog (interrupts mid-shoot), Windows tray notification (platform-specific, OBS doesn't ship one). |
+| 2026-05-20 | TICKET-040 | Encoder calls `set_timecode` every frame from wall+applied (no `inc_timecode` path) | The libltc inc_timecode path was the source of the drift-detection hard-resync that TICKET-008 tried to soften. With slewing, the encoder is wall-locked every frame anyway — inc_timecode would just diverge again. Side benefit: midnight rollover is automatic via timecode_from_unix (was a special case before). `ltc_wrapper_inc_timecode` stays in the public API for back-compat but no longer called from ltc-source.c. | Keep inc_timecode + drift detect (the bug we're fixing), per-frame inc with periodic correction (still needs drift detection), audio-resample (too large a change). |
 
 ---
 
@@ -886,6 +967,7 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 | Session | Date | Agent | Tickets Worked | Status at End | Notes |
 |---------|------|-------|----------------|---------------|-------|
+| 18 | 2026-05-20 | Claude Opus 4.7 (1M) | TICKET-040 (done), TICKET-041 (created) | TICKET-040 DONE; TICKET-041 TODO (deferred dashboard UI) | Epic 17: NTP robustness + drift recovery. (1) Built-in NTP fallback chain: user-server → time.cloudflare.com → time.google.com → HTTP Date → degraded. (2) Loud warning when degraded: `ntp_synced=false` now propagates (was the silent-degradation bug — heartbeat used to report green while local clock drifted); LOG_ERROR on transition + 60 s throttled; new `NTPDegradedWarning` red banner in Properties; after 3 failures `first_sync_done` resets to avoid stale-offset poisoning. (3) Slewing replaces EMA + hard-resync: new pure `ntp_slew_step()` in `ntp-client.c` (7 unit tests covering zero/within/exceeds/large-int64/no-op cases); `encode_next_frame` slews `ntp_offset_ms_applied` toward `ntp_target_offset_ms` at 1 ms/frame recording / 10 ms/frame idle, and `ltc_wrapper_set_timecode`s every frame; deleted `tc_to_total_frames`, `sync_ref_*`, `RESYNC_*`, `EMA_ALPHA`, inc_timecode+drift-check branches; on idle NTP recovery applied jumps to target (instant resync feel for the director); TICKET-036 server+plugin gating during recording untouched. (4) `offset_accessor_cb` returns raw + age, not the slewed value, so the dashboard reflects actual measurement quality. (5) Heartbeat JSON additively carries `raw_offset_ms` + `offset_age_sec` (3 new test cases); dashboard UI deferred to TICKET-041. Tests on Linux toolchain: 7/7 new NTPSlewStep cases green, 13/13 BuildHeartbeatBody cases green (3 new), 11/11 ResponseHasResync cases unchanged; ltc-source.c + mw-recording.c syntax-clean with OBS stub. Full OBS-linked build deferred to CI runners (no OBS SDK in dev container). |
 | 17 | 2026-05-13 | Claude Opus 4.7 (1M) | End-to-end Verifizierung | 17/17 PHPUnit, 14/14 smoke assertions PASS | Erstes End-to-end-Run der Epic-16-Tests gegen die Docker-MariaDB hat zwei echte Production-Bugs aufgedeckt: (1) `db.php` machte `require_once 'config.php'` unbedingt — was im Test-Modus failt weil `config.php` gitignored ist und durch `config-test.php` ersetzt wird. Fix: `if (!defined('DB_HOST'))`-Guard. (2) `handle_heartbeat` gated die Resync-Auslieferung auf `$updated_rows > 0`, aber MariaDB's `rowCount()` zaehlt CHANGED rows, nicht MATCHED rows — bei einem idempotenten Heartbeat (alle Werte schon korrekt) war das 0 und der Resync wurde nicht geliefert. Fix: `PDO::MYSQL_ATTR_FOUND_ROWS => true` in den Connection-Optionen. Beide Bugs waren in der manuellen Verifizierung der Session 14 nicht aufgefallen weil dort jeder Heartbeat einen neuen Offset hatte. Bonus: TICKET-038 hat funktioniert wie versprochen — die Tests haben das gefangen, nicht ein Production-Incident. Auch `.gitignore` erweitert um `/scripts`, `docker-compose.test.yml`, `/website/vendor/`, `/website/.phpunit.cache/`. |
 | 16 | 2026-05-13 | Claude Opus 4.7 (1M) | CI for Epic 16 | PHPUnit + smoke E2E run on every push/PR to website/ or scripts/ | Closed the loop on Epic 16: actual automation, not just runnable scripts. SQLite ruled out after audit — schema uses ENUM/ENGINE/NOW/DATE_SUB/UPDATE-LIMIT/FK_CHECKS/TRUNCATE, all MariaDB-dialect. Added `docker-compose.test.yml` (ephemeral mariadb:11 on port 3307, tmpfs storage, no named volume — every `up` is fresh). `.github/workflows/php-tests.yaml` + `smoke-test.yaml` both use a MariaDB service container on the same port. Smoke workflow materializes `website/includes/config.php` from scratch (it's gitignored), starts `php -S` in the background, waits for `?action=status` to respond, runs the bash smoke script. Added `DB_PORT` support to `db.php` + `bootstrap.php` (backward-compat: only used if defined). Both workflows path-filtered to `website/**` / `scripts/**` so plugin-only PRs don't pay for MariaDB spin-up. YAML/PHP all lint clean. |
 | 15 | 2026-05-13 | Claude Opus 4.7 (1M) | TICKET-037 (done), TICKET-038 (done), TICKET-039 (done) | All Epic 16 tickets DONE | Test coverage for Epic 15. TICKET-037: extracted `mw_build_heartbeat_body()` + `mw_response_has_resync()` into `src/mw-recording-helpers.c/h` (no OBS deps); 21 Google Test cases in `tests/test-mw-helpers.cpp` cover JSON shape with/without offset, recording_active formatting, negative/large/all sync_method values, truncation, NULL inputs, whitespace tolerance in resync detection, edge cases (truncated buffer, trueish suffix, false-positive keys). TICKET-038: PHPUnit harness in `website/tests/` with `composer.json` + `phpunit.xml`; tests dropt/recreate `mw_aufnahme_test` DB on each run (refused unless name ends in `_test`); `MW_TEST_MODE` constant makes `json_response()` throw `JsonResponseException` so handlers can be called directly; covers offset/sync_method range validation, idle-session updates, multi-session ordering, resync gating during recording (the safety-critical TICKET-008 lesson), pending_resync propagation across stop/start, dashboard auth. TICKET-039: `scripts/mw-smoke-test.sh` + `.ps1` (lockstep assertion sequence) drive the real HTTP API through 10 steps including the gated/queued/delivered resync lifecycle; `scripts/mw-smoke-helper.php` is CLI-only (refuses non-CLI SAPI) so it can never accidentally be deployed as an HTTP endpoint. Build clean on Windows, 5/5 ctest suites pass; all PHP files `php -l` clean; bash + PowerShell scripts parse clean. |
@@ -911,7 +993,7 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 ## Known Risks & Open Questions
 
 1. **NTP over restricted networks:** Corporate firewalls may block UDP 123.
-   → Mitigation: Configurable NTP server. Future: HTTP-based time API fallback.
+   → Mitigation: Configurable NTP server **plus** built-in anycast fallback chain (`time.cloudflare.com`, `time.google.com`) and HTTP Date header as last resort — see TICKET-040. Operators are surfaced a `LOG_ERROR` + Properties UI banner when the whole chain fails (was silent before).
 2. **OBS audio callback threading:** `obs_source_output_audio()` must be called from a consistent thread. Research whether a dedicated thread or OBS timer is better.
 3. ~~**libltc LGPL licensing:**~~ **RESOLVED in TICKET-024** — libltc switched from static to dynamic linking (shared library). LGPL Section 4d1 satisfied automatically. DLL/SO shipped alongside plugin.
 4. **Drop-frame timecode:** 29.97 fps requires drop-frame handling. Must verify DaVinci Resolve's expectations.
