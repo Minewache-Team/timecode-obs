@@ -156,6 +156,24 @@
                     + (syncMethod ? ' <span class="sync-label">(' + syncMethodLabel(syncMethod) + ')</span>' : '')
                     : '';
 
+                /* Plugin-Version (TICKET-047) — immer sichtbar wenn vorhanden.
+                 * Veraltete Versionen werden orange markiert, fehlende grau. */
+                const pluginVersion = (s.plugin_version !== null && s.plugin_version !== undefined && s.plugin_version !== '')
+                    ? String(s.plugin_version) : null;
+                const latestVer = window.MW_LATEST_PLUGIN_VERSION || '';
+                let versionCls = 'version-unknown';
+                let versionTxt = 'v? (nicht gemeldet)';
+                if (pluginVersion !== null) {
+                    if (latestVer && pluginVersion !== latestVer) {
+                        versionCls = 'version-outdated';
+                        versionTxt = 'v' + escapeHtml(pluginVersion) + ' (Update verfuegbar)';
+                    } else {
+                        versionCls = 'version-current';
+                        versionTxt = 'v' + escapeHtml(pluginVersion);
+                    }
+                }
+                const versionLine = '<br><span class="' + versionCls + '">Plugin: ' + versionTxt + '</span>';
+
                 const stopBtn = isOnline
                     ? '<button class="force-stop-btn" title="Aufnahme erzwungen beenden" onclick="event.stopPropagation();forceStop(' + s.id + ',\'' + escapeHtml(s.user_name).replace(/'/g, "\\'") + '\')">&#9632; Beenden</button>'
                     : '';
@@ -200,6 +218,7 @@
                     + ' &middot; ' + statusText
                     + '<br>' + timeLabel + ': ' + timeStr
                     + offsetLine
+                    + versionLine
                     + '</div>'
                     + resyncBtn
                     + stopBtn

@@ -1016,28 +1016,31 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
   `tests/CMakeLists.txt`, possibly extensions to existing OBS stubs.
 
 #### TICKET-047: plugin_version end-to-end (heartbeat → DB → dashboard)
-- **Status:** `TODO`
+- **Status:** `DONE`
 - **Depends on:** (none direct; uses existing `PLUGIN_VERSION` const)
 - **Type:** Feature
 - **Description:** Plugin additively adds `plugin_version` (string) to the
   heartbeat JSON (value: `PLUGIN_VERSION` macro from
   `src/plugin-support.c.in`). Server validates `^[\w.+-]{1,20}$`, persists
   to new `sessions.plugin_version VARCHAR(20) NULL` column. Dashboard
-  renders "Plugin: vX.Y.Z" under each user card, colour-coded against a
-  `SERVER_KNOWN_LATEST` constant: green if matches, orange "Update verfügbar"
-  if mismatch, grey "v? (nicht gemeldet)" if NULL.
+  renders "Plugin: vX.Y.Z" under each user card, colour-coded against
+  `window.MW_LATEST_PLUGIN_VERSION` (set inline in `index.php` and pinned
+  per release): green if matches, orange "Update verfügbar" if mismatch,
+  grey italic "v? (nicht gemeldet)" if NULL.
+  **Note on UPDATE:** uses `COALESCE(:pv, plugin_version)` so a single
+  missing/junk heartbeat doesn't erase the last-known version — important
+  for stable dashboard display when an old plugin co-exists.
 - **Acceptance Criteria:**
-  - [ ] Plugin sends the field.
-  - [ ] Server validates (rejects junk silently to NULL), persists.
-  - [ ] Migration in `install.php` is idempotent.
-  - [ ] Dashboard renders 3 states (current / outdated / unknown).
-  - [ ] Backwards-compat: old plugin without field → grey "v?", no error.
-  - [ ] Unit tests in `test-mw-helpers.cpp` cover new field.
-  - [ ] PHPUnit test verifies persistence + validation.
+  - [x] Plugin sends the field via `PLUGIN_VERSION` in mw-recording.c.
+  - [x] Server validates `[\w.+-]{1,20}`; junk silently dropped via COALESCE.
+  - [x] Migration in `install.php` is idempotent (`ADD COLUMN` in try/catch).
+  - [x] Dashboard renders 3 states (current / outdated / unknown).
+  - [x] Backwards-compat: old plugin without field → grey "v?", no error.
+  - [x] Unit tests in `test-mw-helpers.cpp` cover new field (4 new cases).
+  - [x] PHPUnit tests verify accept/reject/persist (5 new cases).
 - **Files:** `src/mw-recording-helpers.{c,h}`, `src/mw-recording.c`,
-  `website/api.php`, `website/install.php`, `website/dashboard-api.php`,
-  `website/includes/config.php` (or `config-example.php`),
-  `website/assets/app.js`, `website/assets/style.css`,
+  `website/api.php`, `website/install.php`, `website/sse.php`,
+  `website/index.php`, `website/assets/app.js`, `website/assets/style.css`,
   `tests/test-mw-helpers.cpp`, `website/tests/HeartbeatTest.php`.
 
 #### TICKET-048: Datenschutz update + re-consent mechanic

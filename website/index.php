@@ -79,6 +79,13 @@ require_dashboard_auth();
     <!-- Toast Benachrichtigung -->
     <div class="toast" id="toast"></div>
 
-    <script src="assets/app.js?v=2"></script>
+    <script>
+        /* TICKET-047: Aktuelle bekannte Plugin-Version. Wird beim Release
+         * zusammen mit buildspec.json bewusst hier gepinnt. Veraltete Plugins
+         * werden im Dashboard orange markiert. Leere Zeichenkette = Pruefung
+         * deaktiviert. */
+        window.MW_LATEST_PLUGIN_VERSION = '0.6.0';
+    </script>
+    <script src="assets/app.js?v=3"></script>
 </body>
 </html>

@@ -85,6 +85,12 @@ try {
         $db->exec("ALTER TABLE sessions ADD COLUMN last_recording_active TINYINT(1) NOT NULL DEFAULT 0 AFTER pending_resync");
     } catch (PDOException $e) { /* bereits vorhanden */ }
 
+    /* Epic 18: Plugin-Version pro Session (TICKET-047). Identifiziert
+     * veraltete Plugin-Installationen im Regisseur-Panel. */
+    try {
+        $db->exec("ALTER TABLE sessions ADD COLUMN plugin_version VARCHAR(20) NULL AFTER last_recording_active");
+    } catch (PDOException $e) { /* bereits vorhanden */ }
+
     echo "<h1>Installation erfolgreich!</h1>";
     echo "<p>Alle 3 Tabellen wurden angelegt:</p>";
     echo "<ul>";

@@ -181,4 +181,106 @@ final class HeartbeatTest extends MwTestCase
         $row = $this->fetchSession($id);
         $this->assertSame(1, (int) $row['last_recording_active']);
     }
+
+    /* ===== TICKET-047: plugin_version ===== */
+
+    public function test_accepts_plugin_version(): void
+    {
+        $id = $this->seedOnlineSession('VersionUser');
+
+        $this->callHeartbeat([
+            'name' => 'VersionUser',
+            'recording_active' => true,
+            'plugin_version' => '0.6.0',
+        ]);
+
+        $row = $this->fetchSession($id);
+        $this->assertSame('0.6.0', (string) $row['plugin_version']);
+    }
+
+    public function test_accepts_plugin_version_with_prerelease(): void
+    {
+        $id = $this->seedOnlineSession('PreUser');
+
+        $this->callHeartbeat([
+            'name' => 'PreUser',
+            'recording_active' => true,
+            'plugin_version' => '1.0.0-beta.2',
+        ]);
+
+        $row = $this->fetchSession($id);
+        $this->assertSame('1.0.0-beta.2', (string) $row['plugin_version']);
+    }
+
+    public function test_rejects_malformed_plugin_version_silently(): void
+    {
+        /* HTML-Injection / SQL-Injection / Newlines: alles MUSS still
+         * verworfen werden, sodass der existierende plugin_version-Wert
+         * erhalten bleibt (dank COALESCE in der UPDATE-Klausel). */
+        $id = $this->seedOnlineSession('SafeUser');
+
+        /* Erst gueltige Version setzen */
+        $this->callHeartbeat([
+            'name' => 'SafeUser',
+            'recording_active' => true,
+            'plugin_version' => '0.5.1',
+        ]);
+
+        /* Dann Quatsch reinwerfen — der gespeicherte Wert darf sich
+         * nicht aendern (zurueck auf NULL ist genauso falsch wie
+         * ueberschreiben). */
+        $this->callHeartbeat([
+            'name' => 'SafeUser',
+            'recording_active' => true,
+            'plugin_version' => '<script>alert(1)</script>',
+        ]);
+
+        $row = $this->fetchSession($id);
+        $this->assertSame('0.5.1', (string) $row['plugin_version']);
+    }
+
+    public function test_rejects_overlong_plugin_version(): void
+    {
+        $id = $this->seedOnlineSession('LongUser');
+
+        /* Schon eine bekannte Version vorhanden */
+        $this->callHeartbeat([
+            'name' => 'LongUser',
+            'recording_active' => true,
+            'plugin_version' => '0.5.1',
+        ]);
+
+        /* > 20 Zeichen wird verworfen */
+        $this->callHeartbeat([
+            'name' => 'LongUser',
+            'recording_active' => true,
+            'plugin_version' => '99.99.99-very-long-suffix',
+        ]);
+
+        $row = $this->fetchSession($id);
+        $this->assertSame('0.5.1', (string) $row['plugin_version']);
+    }
+
+    public function test_missing_plugin_version_preserves_existing(): void
+    {
+        /* Wenn alte Plugins kein Feld senden, soll der zuletzt bekannte
+         * Wert nicht ueberschrieben werden (COALESCE schuetzt das). */
+        $id = $this->seedOnlineSession('MixedUser');
+
+        $this->callHeartbeat([
+            'name' => 'MixedUser',
+            'recording_active' => true,
+            'plugin_version' => '0.6.0',
+        ]);
+
+        /* Naechster Heartbeat ohne plugin_version (z.B. alte Version
+         * durch einen Bug, oder kurzer Plugin-Glitch). */
+        $this->callHeartbeat([
+            'name' => 'MixedUser',
+            'recording_active' => true,
+        ]);
+
+        $row = $this->fetchSession($id);
+        $this->assertSame('0.6.0', (string) $row['plugin_version']);
+    }
 }

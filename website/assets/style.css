@@ -190,6 +190,22 @@ nav a.active {
     font-size: 0.8em;
 }
 
+/* Plugin-Version-Anzeige pro User-Card (TICKET-047) */
+.user-card .version-current {
+    color: #4caf50;
+    font-size: 0.85em;
+}
+.user-card .version-outdated {
+    color: #ff9800;
+    font-size: 0.85em;
+    font-weight: bold;
+}
+.user-card .version-unknown {
+    color: #999;
+    font-size: 0.85em;
+    font-style: italic;
+}
+
 .user-card .name {
     font-size: 1.1rem;
     font-weight: bold;

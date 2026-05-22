@@ -32,15 +32,36 @@ int mw_build_heartbeat_body(char *buf, size_t bufsz,
 			    int sync_method,
 			    bool synced,
 			    int64_t raw_offset_ms,
-			    int offset_age_sec)
+			    int offset_age_sec,
+			    const char *plugin_version)
 {
 	if (!buf || bufsz == 0)
 		return -1;
 	if (!name)
 		name = "";
 
+	bool have_version = (plugin_version != NULL && plugin_version[0] != '\0');
+
 	int n;
-	if (have_offset) {
+	if (have_offset && have_version) {
+		n = snprintf(buf, bufsz,
+			     "{\"name\":\"%s\","
+			     "\"recording_active\":%s,"
+			     "\"offset_ms\":%lld,"
+			     "\"sync_method\":%d,"
+			     "\"synced\":%s,"
+			     "\"raw_offset_ms\":%lld,"
+			     "\"offset_age_sec\":%d,"
+			     "\"plugin_version\":\"%s\"}",
+			     name,
+			     recording_active ? "true" : "false",
+			     (long long)offset_ms,
+			     sync_method,
+			     synced ? "true" : "false",
+			     (long long)raw_offset_ms,
+			     offset_age_sec,
+			     plugin_version);
+	} else if (have_offset) {
 		n = snprintf(buf, bufsz,
 			     "{\"name\":\"%s\","
 			     "\"recording_active\":%s,"
@@ -56,6 +77,14 @@ int mw_build_heartbeat_body(char *buf, size_t bufsz,
 			     synced ? "true" : "false",
 			     (long long)raw_offset_ms,
 			     offset_age_sec);
+	} else if (have_version) {
+		n = snprintf(buf, bufsz,
+			     "{\"name\":\"%s\","
+			     "\"recording_active\":%s,"
+			     "\"plugin_version\":\"%s\"}",
+			     name,
+			     recording_active ? "true" : "false",
+			     plugin_version);
 	} else {
 		n = snprintf(buf, bufsz,
 			     "{\"name\":\"%s\","

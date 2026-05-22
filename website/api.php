@@ -175,6 +175,18 @@ function handle_heartbeat(array $input): void
     $recording_active = isset($input['recording_active'])
         ? (bool) $input['recording_active'] : true;
 
+    /* TICKET-047: plugin_version — Semver-tolerantes Format. Maximal 20 Zeichen,
+     * nur [\w.+-]. Alles andere wird stillschweigend auf NULL gesetzt, damit
+     * alte/manipulierte Clients keine Errors verursachen. */
+    $plugin_version = null;
+    if (isset($input['plugin_version']) && is_string($input['plugin_version'])) {
+        $trimmed = trim($input['plugin_version']);
+        if (strlen($trimmed) > 0 && strlen($trimmed) <= 20
+            && preg_match('/^[\w.+-]+$/', $trimmed)) {
+            $plugin_version = $trimmed;
+        }
+    }
+
     $db = get_db();
 
     /* Update der LATESTEN Session des Users — auch wenn offline.
@@ -185,7 +197,8 @@ function handle_heartbeat(array $input): void
            SET last_heartbeat        = NOW(),
                offset_ms             = :offset,
                sync_method           = :method,
-               last_recording_active = :rec
+               last_recording_active = :rec,
+               plugin_version        = COALESCE(:pv, plugin_version)
          WHERE user_name = :name AND status != 'removed'
          ORDER BY id DESC
          LIMIT 1"
@@ -195,6 +208,7 @@ function handle_heartbeat(array $input): void
         ':offset' => $offset_ms,
         ':method' => $sync_method,
         ':rec'    => $recording_active ? 1 : 0,
+        ':pv'     => $plugin_version,
     ]);
     $updated_rows = $stmt->rowCount();
 
@@ -241,7 +255,8 @@ function handle_status(): void
     $stmt = $db->prepare(
         "SELECT s.id, s.user_name, s.camera_id, s.status, s.started_at, s.stopped_at,
                 s.last_heartbeat, s.offset_ms, s.sync_method,
-                s.pending_resync, s.last_recording_active
+                s.pending_resync, s.last_recording_active,
+                s.plugin_version
          FROM sessions s
          INNER JOIN (
              SELECT user_name, MAX(id) as max_id

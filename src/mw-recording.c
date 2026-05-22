@@ -325,7 +325,8 @@ static void *heartbeat_thread_func(void *data)
 			mw_build_heartbeat_body(body, sizeof(body), name,
 						active, have_offset, offset_ms,
 						sync_method, synced,
-						raw_offset_ms, offset_age_sec);
+						raw_offset_ms, offset_age_sec,
+						PLUGIN_VERSION);
 
 			char response[512] = {0};
 			bool ok = mw_http_post(server, "?action=heartbeat",
