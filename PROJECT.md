@@ -13,7 +13,7 @@
 | Name             | obs-ltc-timecode                           |
 | Type             | OBS Studio C/C++ Plugin (native)           |
 | Purpose          | NTP-synced LTC timecode audio source       |
-| Current Version  | 0.5.0 (Minewache branch)                   |
+| Current Version  | 0.5.1 (Minewache branch)                   |
 | Target Platforms | Windows 10+ (x64), Linux (Ubuntu 24.04+)  |
 | OBS SDK Version  | 32.x (current stable)                      |
 | License          | GPLv2+ / GPL-2.0-or-later (OBS compat)    |
