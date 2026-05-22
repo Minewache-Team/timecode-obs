@@ -1081,19 +1081,22 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
   `tests/test-ntp-offset.cpp`.
 
 #### TICKET-050: Random jitter before first NTP query
-- **Status:** `TODO`
-- **Depends on:** TICKET-049
+- **Status:** `DONE`
+- **Depends on:** TICKET-040
 - **Type:** Feature (server load protection)
-- **Description:** When the NTP sync thread starts (plugin load), sleep
-  `rand() % 10000` ms (0–10 s, uniform) **before** the first query. Spreads
-  15 simultaneous plugin starts across a 10-second window, turning a 15-QPS
-  spike on a private/studio NTP server into a 1.5-QPS smear. Public NTP
-  (Cloudflare/Google) wouldn't notice either way; this is pure defence-
-  in-depth for studio LAN NTP setups.
+- **Description:** Added at the very start of `ntp_sync_thread` (before
+  the main loop): `os_event_timedwait(stop_event, jitter_ms)` where
+  `jitter_ms = (os_gettime_ns()/1000) % 10000`. No `rand()` calls —
+  avoids thread-safety + reproducibility concerns. Logs the chosen delay
+  so an operator debugging "why is sync slow on day 1" can see it. If
+  the source is destroyed during the jitter window the thread exits
+  cleanly.
 - **Acceptance Criteria:**
-  - [ ] First-query delay observable in log timestamps.
-  - [ ] Seeded by `os_gettime_ns()` or similar (not constant).
-  - [ ] No effect on subsequent (steady-state) intervals.
+  - [x] Jitter applied once before first query, never afterwards.
+  - [x] Source = `os_gettime_ns()`, not `rand()`.
+  - [x] Log message emitted with chosen delay.
+  - [x] Builds clean with WARNING_AS_ERROR (cast to unsigned long
+        explicit, no C4244).
 - **Files:** `src/ltc-source.c`.
 
 #### TICKET-051: "Last sync N seconds ago" line on dashboard cards

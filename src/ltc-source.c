@@ -167,6 +167,22 @@ static void *ntp_sync_thread(void *data)
 
 	os_set_thread_name("ltc-ntp-sync");
 
+	/* TICKET-050: Random jitter 0-10 s before the very first NTP query.
+	 * When 15 OBS instances start simultaneously (morning ritual) and all
+	 * point at the same NTP server (especially a private studio NTP server),
+	 * the first-second QPS spike can drop packets. Spreading the first
+	 * query uniformly over a 10 s window turns the spike into a smear.
+	 * Public NTP (Cloudflare/Google) wouldn't notice either way, but this
+	 * is cheap defence-in-depth. Uses os_gettime_ns() modulo, no rand()
+	 * — avoids thread-safety + reproducibility concerns. */
+	unsigned long jitter_ms =
+		(unsigned long)((os_gettime_ns() / 1000ULL) % 10000ULL);
+	obs_log(LOG_INFO,
+		"NTP cold-start jitter: waiting %lu ms before first query",
+		jitter_ms);
+	if (os_event_timedwait(ctx->stop_event, jitter_ms) == 0)
+		return NULL;
+
 	/* Whether this cycle was triggered by the resync_event (director kick)
 	 * versus the regular interval timer. Set in the wait loop below; reset
 	 * here on the very first iteration (timer-driven). */
