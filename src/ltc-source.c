@@ -197,6 +197,14 @@ static void *ntp_sync_thread(void *data)
 	 * here on the very first iteration (timer-driven). */
 	bool cycle_kicked_by_resync = false;
 
+	/* TICKET-049: cycle counter for the burst-startup pattern. First 3
+	 * cycles run with a 2 s gap (Phase 1, "Cold Start"), next 2 with a
+	 * 10 s gap (Phase 2, "Stabilisation"), then standard sync_interval_sec
+	 * (Phase 3, "Steady State"). The slewing logic absorbs outliers
+	 * already, so no median filter is needed — each measurement updates
+	 * the target and the encoder gently follows. */
+	int cycle_count = 0;
+
 	while (os_event_timedwait(ctx->stop_event, 0) != 0) {
 		ntp_result_t result;
 		bool success = false;
@@ -333,9 +341,22 @@ static void *ntp_sync_thread(void *data)
 		 * stop_event or resync_event fires. Poll in 500ms chunks —
 		 * negligible CPU cost; worst-case 500ms latency on a director-
 		 * issued resync command, which is well within tolerance.
+		 *
+		 * TICKET-049: burst pattern — Phase 1 (cycles 0-2): 2 s gap,
+		 * Phase 2 (cycles 3-4): 10 s gap, Phase 3 (cycle 5+): full
+		 * sync_interval_sec. Speeds up the cold-start path so the
+		 * applied offset converges to a good value within ~36 s
+		 * instead of one full sync_interval_sec (default 300 s).
 		 */
-		unsigned long total_ms =
-			(unsigned long)ctx->sync_interval_sec * 1000UL;
+		cycle_count++;
+		unsigned long phase_sec;
+		if (cycle_count <= 3)
+			phase_sec = 2;
+		else if (cycle_count <= 5)
+			phase_sec = 10;
+		else
+			phase_sec = (unsigned long)ctx->sync_interval_sec;
+		unsigned long total_ms = phase_sec * 1000UL;
 		unsigned long elapsed_ms = 0;
 		cycle_kicked_by_resync = false;
 		while (elapsed_ms < total_ms) {

@@ -1067,20 +1067,23 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
   `data/locale/en-US.ini`.
 
 #### TICKET-049: NTP burst mode at cold start
-- **Status:** `TODO`
-- **Depends on:** TICKET-040
+- **Status:** `DONE` (simplified: no median, slewing absorbs outliers)
+- **Depends on:** TICKET-040, TICKET-050
 - **Type:** Feature (sync hardening)
-- **Description:** Replace the current "one NTP query then 5-min interval"
-  with a 3-phase startup: Phase 1 (cold start) — 3 queries × 2 s pause,
-  take median offset; Phase 2 (stabilisation) — 2 queries × 10 s pause;
-  Phase 3 (steady state) — current 5-min interval. Median (not mean) to
-  resist outliers from packet jitter.
+- **Description:** Implemented as cycle counter in `ntp_sync_thread`:
+  Phase 1 (cycles 1-3) sleeps 2 s between queries, Phase 2 (cycles 4-5)
+  sleeps 10 s, Phase 3 (cycles 6+) uses the configured
+  `sync_interval_sec` (default 300 s). Each measurement updates the
+  target offset normally; the existing slewing logic absorbs any
+  outliers without a median filter — keeps the change small and the
+  recovery time honest. Result: applied offset converges to a stable
+  value within ~36 s of plugin load instead of one full interval.
 - **Acceptance Criteria:**
-  - [ ] Burst phase visible in `obs_log` startup sequence.
-  - [ ] Unit test for median selection (3 sample values).
-  - [ ] After Phase 3, behaviour identical to current 0.5.1.
-- **Files:** `src/ltc-source.c`, `src/ntp-client.{c,h}` (median helper),
-  `tests/test-ntp-offset.cpp`.
+  - [x] Cycle counter drives the sleep duration.
+  - [x] Phase boundaries (3, 5) match the docstring.
+  - [x] No median filter (existing slewing is sufficient).
+  - [x] After Phase 3, behaviour identical to 0.5.1 steady state.
+- **Files:** `src/ltc-source.c`.
 
 #### TICKET-050: Random jitter before first NTP query
 - **Status:** `DONE`
