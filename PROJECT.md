@@ -905,6 +905,225 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 ---
 
+### Epic 18: Trust the Timecode (0.6.0)
+
+> Field audit before next shoot revealed: (1) plugin version invisible in the
+> director dashboard (can't tell who runs an outdated build), (2) sync-loss
+> during recording is silently absorbed by slewing toward a stale target,
+> (3) all 15+ plugin instances could hit the same NTP server simultaneously
+> at morning startup, (4) C++ tests are built but never executed by CI, and
+> (5) no per-card freshness signal for the offset measurement.
+>
+> Cold-start modal (TICKET-042) is implemented but **gated behind a compile
+> flag (`MW_COLD_START_MODAL_ENABLED`, default OFF)** for 0.6.0 — the
+> recording-start codepath stays untouched for the imminent shoot. Flag can
+> be enabled in a later 0.6.x patch once the modal has been hardened in lab
+> conditions.
+
+#### TICKET-042: Cold-start modal with "report to director" notice (FLAG-GATED)
+- **Status:** `TODO`
+- **Depends on:** TICKET-040
+- **Type:** Feature (safety)
+- **Description:** When `OBS_FRONTEND_EVENT_RECORDING_STARTING` fires and
+  `first_sync_done == false`, show a modal warning the operator that the
+  timecode is not yet synchronised; default button "Abbrechen", second button
+  "Trotzdem aufnehmen" emphasises *report to director immediately*. Overrides
+  recorded in `cold_start_overridden` heartbeat field + metadata sidecar.
+  **Build with `#ifdef MW_COLD_START_MODAL_ENABLED` only — default OFF for
+  0.6.0** so the recording-start path is unchanged for the imminent shoot.
+- **Acceptance Criteria:**
+  - [ ] Modal code present but unreachable when flag is undefined.
+  - [ ] Compile-tests pass with both flag states.
+  - [ ] When flag ON (lab only): Abbrechen aborts recording, "Trotzdem"
+        proceeds and sets `cold_start_overridden=true`.
+- **Files:** `src/mw-recording.c`, `data/locale/en-US.ini`, `CMakeLists.txt`
+  (optional flag).
+
+#### TICKET-043: Sync-loss-during-recording detection
+- **Status:** `TODO`
+- **Depends on:** TICKET-040
+- **Type:** Feature (safety, passive)
+- **Description:** New context flag `sync_lost_during_recording` set to `true`
+  when, during active recording, `consecutive_sync_failures >= 3` AND
+  `last_successful_sync_age_sec > 60`. Plugin emits the flag in the heartbeat
+  JSON additively. On `OBS_FRONTEND_EVENT_RECORDING_STOPPED`, if flag was
+  set, write a `sync_loss_periods: [{start,end}]` array to the metadata
+  sidecar. Passive — no UI dialog, no abort, no eingriff in the recording
+  pipeline.
+- **Acceptance Criteria:**
+  - [ ] Flag goes true when conditions met during recording.
+  - [ ] Heartbeat JSON additively carries the field.
+  - [ ] Sidecar records the loss interval(s).
+  - [ ] Server validates + persists.
+  - [ ] Dashboard shows persistent red marker on the user card.
+- **Files:** `src/ltc-source.c`, `src/mw-recording.c`,
+  `src/mw-recording-helpers.{c,h}`, `src/metadata-writer.c`, `website/api.php`,
+  `website/install.php`, `website/dashboard-api.php`, `website/assets/app.js`,
+  `tests/test-mw-helpers.cpp`, `website/tests/HeartbeatTest.php`.
+
+#### TICKET-044: PC clock skew warning on first NTP sync
+- **Status:** `TODO`
+- **Depends on:** TICKET-040
+- **Type:** Feature (visibility)
+- **Description:** When the first successful NTP query returns
+  `|offset_ms| > 2000`, emit `LOG_ERROR` ("PC clock is X seconds off — please
+  fix Windows time"), surface as a banner in the LTC source Properties UI
+  ("PCClockOffWarning"), and additively add `initial_offset_ms` to the
+  heartbeat JSON so the dashboard can render "PC-Uhr war 4 s falsch".
+- **Acceptance Criteria:**
+  - [ ] LOG_ERROR fires once on first sync if offset > 2 s.
+  - [ ] Properties UI shows banner with formatted offset.
+  - [ ] Heartbeat carries `initial_offset_ms`.
+  - [ ] Dashboard renders the warning at the user card.
+- **Files:** `src/ltc-source.c`, `src/mw-recording-helpers.{c,h}`,
+  `website/api.php`, `website/dashboard-api.php`, `website/assets/app.js`,
+  `tests/test-mw-helpers.cpp`.
+
+#### TICKET-045: Enable ctest in CI on all 3 platforms
+- **Status:** `TODO`
+- **Depends on:** (none — pure CI work)
+- **Type:** Infrastructure
+- **Description:** `ctest --preset <platform> --output-on-failure` is never
+  invoked in the current `build-project.yaml`; the 5 C++ test binaries are
+  compiled but never run. Add a "Run tests" step after the build step on
+  each of windows-2022 / macos-15 / ubuntu-24.04. A failing test must fail
+  the workflow.
+- **Acceptance Criteria:**
+  - [ ] CI runs ctest on all 3 platforms after build.
+  - [ ] A deliberately broken test makes the workflow fail.
+  - [ ] No new dependencies; uses existing CMake presets.
+- **Files:** `.github/workflows/build-project.yaml`, possibly
+  `.github/scripts/Build-Windows.ps1` / `build-ubuntu.sh` / `build-macos.sh`.
+
+#### TICKET-046: Integration test harness with mock NTP source
+- **Status:** `TODO`
+- **Depends on:** TICKET-045
+- **Type:** Test infrastructure
+- **Description:** New `tests/test-ltc-source-integration.cpp` drives
+  `encode_next_frame` end-to-end with a programmable mock NTP offset source.
+  Covers: (a) burst-mode median selection (TICKET-049), (b) slewing
+  convergence from large offset over many frames at production rates, (c)
+  sync-loss-during-recording flag transitions (TICKET-043).
+- **Acceptance Criteria:**
+  - [ ] At least 3 integration scenarios covered.
+  - [ ] Uses existing OBS-stub layer (`tests/obs-stub-*.cpp` if any) or extends it.
+  - [ ] Builds and runs on all 3 CI platforms.
+- **Files:** `tests/test-ltc-source-integration.cpp` (new),
+  `tests/CMakeLists.txt`, possibly extensions to existing OBS stubs.
+
+#### TICKET-047: plugin_version end-to-end (heartbeat → DB → dashboard)
+- **Status:** `TODO`
+- **Depends on:** (none direct; uses existing `PLUGIN_VERSION` const)
+- **Type:** Feature
+- **Description:** Plugin additively adds `plugin_version` (string) to the
+  heartbeat JSON (value: `PLUGIN_VERSION` macro from
+  `src/plugin-support.c.in`). Server validates `^[\w.+-]{1,20}$`, persists
+  to new `sessions.plugin_version VARCHAR(20) NULL` column. Dashboard
+  renders "Plugin: vX.Y.Z" under each user card, colour-coded against a
+  `SERVER_KNOWN_LATEST` constant: green if matches, orange "Update verfügbar"
+  if mismatch, grey "v? (nicht gemeldet)" if NULL.
+- **Acceptance Criteria:**
+  - [ ] Plugin sends the field.
+  - [ ] Server validates (rejects junk silently to NULL), persists.
+  - [ ] Migration in `install.php` is idempotent.
+  - [ ] Dashboard renders 3 states (current / outdated / unknown).
+  - [ ] Backwards-compat: old plugin without field → grey "v?", no error.
+  - [ ] Unit tests in `test-mw-helpers.cpp` cover new field.
+  - [ ] PHPUnit test verifies persistence + validation.
+- **Files:** `src/mw-recording-helpers.{c,h}`, `src/mw-recording.c`,
+  `website/api.php`, `website/install.php`, `website/dashboard-api.php`,
+  `website/includes/config.php` (or `config-example.php`),
+  `website/assets/app.js`, `website/assets/style.css`,
+  `tests/test-mw-helpers.cpp`, `website/tests/HeartbeatTest.php`.
+
+#### TICKET-048: Datenschutz update + re-consent mechanic
+- **Status:** `TODO`
+- **Depends on:** TICKET-043, TICKET-044, TICKET-047, TICKET-049, TICKET-052
+- **Type:** Compliance
+- **Description:** Add new heartbeat fields (plugin_version, sync_status,
+  initial_offset_ms, audio drop counters) to `datenschutz.php` Section 3
+  table; update "Stand: TT.MM.JJJJ"; add yellow info-box at top
+  ("Aktualisiert am … — neue Felder: …"). In the plugin: bump
+  `CURRENT_CONSENT_VERSION` to 2; on plugin start, if stored
+  `mw_consent_version < 2`, show the existing DSGVO dialog again with an
+  intro line explaining *why* re-consent is needed. Decline = heartbeat
+  disabled (LTC still works locally). Accept = store version 2.
+- **Acceptance Criteria:**
+  - [ ] `datenschutz.php` Section 3 table has new rows.
+  - [ ] Info-box visible at top of page with new date.
+  - [ ] Plugin: re-consent dialog shown on 0.5.x → 0.6.0 upgrade.
+  - [ ] Storing version 2 prevents subsequent re-shows.
+  - [ ] Decline path: no heartbeat sent (verified by absence of HTTP POST in test).
+- **Files:** `website/datenschutz.php`, `src/mw-recording.c`,
+  `data/locale/en-US.ini`.
+
+#### TICKET-049: NTP burst mode at cold start
+- **Status:** `TODO`
+- **Depends on:** TICKET-040
+- **Type:** Feature (sync hardening)
+- **Description:** Replace the current "one NTP query then 5-min interval"
+  with a 3-phase startup: Phase 1 (cold start) — 3 queries × 2 s pause,
+  take median offset; Phase 2 (stabilisation) — 2 queries × 10 s pause;
+  Phase 3 (steady state) — current 5-min interval. Median (not mean) to
+  resist outliers from packet jitter.
+- **Acceptance Criteria:**
+  - [ ] Burst phase visible in `obs_log` startup sequence.
+  - [ ] Unit test for median selection (3 sample values).
+  - [ ] After Phase 3, behaviour identical to current 0.5.1.
+- **Files:** `src/ltc-source.c`, `src/ntp-client.{c,h}` (median helper),
+  `tests/test-ntp-offset.cpp`.
+
+#### TICKET-050: Random jitter before first NTP query
+- **Status:** `TODO`
+- **Depends on:** TICKET-049
+- **Type:** Feature (server load protection)
+- **Description:** When the NTP sync thread starts (plugin load), sleep
+  `rand() % 10000` ms (0–10 s, uniform) **before** the first query. Spreads
+  15 simultaneous plugin starts across a 10-second window, turning a 15-QPS
+  spike on a private/studio NTP server into a 1.5-QPS smear. Public NTP
+  (Cloudflare/Google) wouldn't notice either way; this is pure defence-
+  in-depth for studio LAN NTP setups.
+- **Acceptance Criteria:**
+  - [ ] First-query delay observable in log timestamps.
+  - [ ] Seeded by `os_gettime_ns()` or similar (not constant).
+  - [ ] No effect on subsequent (steady-state) intervals.
+- **Files:** `src/ltc-source.c`.
+
+#### TICKET-051: "Last sync N seconds ago" line on dashboard cards
+- **Status:** `TODO`
+- **Depends on:** TICKET-040 (heartbeat already carries `offset_age_sec`)
+- **Type:** Feature (visibility)
+- **Description:** Frontend-only. In `renderUserCards`, add a row showing
+  "Letzte Sync: vor X s/Min", colour-coded green (<180 s), orange
+  (180–480 s), red (>480 s). Data already arrives via `offset_age_sec`
+  field added by TICKET-040.
+- **Acceptance Criteria:**
+  - [ ] Row renders under existing drift line.
+  - [ ] Three colour states verified.
+  - [ ] Missing field renders nothing (no console error).
+- **Files:** `website/assets/app.js`, `website/assets/style.css`.
+
+#### TICKET-052: Audio-drop detection during recording
+- **Status:** `TODO`
+- **Depends on:** TICKET-047
+- **Type:** Feature (LTC integrity signal)
+- **Description:** During active recording, sample OBS' global counters
+  (`obs_get_total_frames()` vs `obs_get_lagged_frames()` — or audio-drop
+  equivalent). If lagged > previous reading while recording, set
+  `audio_drops_during_recording=true` for the heartbeat. Dashboard
+  shows red badge "⚠ Audio-Aussetzer" on the user card.
+- **Acceptance Criteria:**
+  - [ ] Heartbeat field added, additive, validated server-side.
+  - [ ] Migration column `audio_drops_during_recording TINYINT(1)`.
+  - [ ] Dashboard renders badge.
+  - [ ] No-op when recording is idle.
+- **Files:** `src/mw-recording.c`, `src/mw-recording-helpers.{c,h}`,
+  `website/api.php`, `website/install.php`, `website/dashboard-api.php`,
+  `website/assets/app.js`, `website/assets/style.css`,
+  `tests/test-mw-helpers.cpp`.
+
+---
+
 ## Decision Log
 
 | Date | Ticket | Decision | Rationale | Alternatives Considered |
