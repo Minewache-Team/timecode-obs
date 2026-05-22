@@ -138,6 +138,15 @@ struct ltc_source_context {
 	int consecutive_sync_failures;
 	uint64_t last_degraded_log_ns;
 
+	/* TICKET-044: PC clock skew on first sync. If the initial NTP query
+	 * returned |offset| > 2 s, the user's Windows clock is wildly wrong.
+	 * Stored so the Properties UI and heartbeat can surface this — fixing
+	 * the system clock prevents the next session from starting cold with
+	 * a large offset (which is by far the most common source of multi-
+	 * minute drift in the field).
+	 * 0 = no skew detected (or NTP never succeeded). */
+	volatile int64_t initial_clock_skew_ms;
+
 	/* Edge tracking so the encoder can apply target instantly on the first
 	 * frame after the NTP thread recovers from a failure (only when not
 	 * recording — TICKET-036 contract is preserved). */
@@ -263,6 +272,26 @@ static void *ntp_sync_thread(void *data)
 				ctx->first_sync_done = true;
 				/* Initial sync — encoder will pick this up via
 				 * the !frame_valid path. */
+				/* TICKET-044: detect a wildly wrong PC clock on
+				 * the initial sync. > 2 s usually means Windows
+				 * Time service is off or the user is on a clock
+				 * that hasn't synced to the internet yet. The
+				 * slewing will correct it over time but a loud
+				 * one-time warning lets the operator fix the
+				 * underlying issue. */
+				if (result.offset_ms > 2000 ||
+				    result.offset_ms < -2000) {
+					ctx->initial_clock_skew_ms =
+						result.offset_ms;
+					obs_log(LOG_ERROR,
+						"PC clock is %.1f s off from NTP "
+						"(%lld ms). Timecode will be "
+						"slewed to correct, but please "
+						"fix the Windows time service to "
+						"avoid this on the next start.",
+						(double)result.offset_ms / 1000.0,
+						(long long)result.offset_ms);
+				}
 			} else if (was_degraded || cycle_kicked_by_resync) {
 				/* Recovered from failure OR director-issued
 				 * resync: ask the encoder to apply target

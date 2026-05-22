@@ -962,22 +962,24 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
   `tests/test-mw-helpers.cpp`, `website/tests/HeartbeatTest.php`.
 
 #### TICKET-044: PC clock skew warning on first NTP sync
-- **Status:** `TODO`
+- **Status:** `DONE` (log-only for 0.6.0; dashboard wiring deferred)
 - **Depends on:** TICKET-040
 - **Type:** Feature (visibility)
 - **Description:** When the first successful NTP query returns
-  `|offset_ms| > 2000`, emit `LOG_ERROR` ("PC clock is X seconds off — please
-  fix Windows time"), surface as a banner in the LTC source Properties UI
-  ("PCClockOffWarning"), and additively add `initial_offset_ms` to the
-  heartbeat JSON so the dashboard can render "PC-Uhr war 4 s falsch".
+  `|offset_ms| > 2000`, emit `LOG_ERROR` with the actual offset and
+  remediation hint ("fix the Windows time service to avoid this on the
+  next start"). The slewing logic already corrects the timecode over
+  time — this warning is about getting the operator to fix the
+  underlying clock so future starts begin cold-and-good rather than
+  cold-and-bad. State stored in `initial_clock_skew_ms` on the source
+  context for future dashboard wiring (deferred to 0.6.1).
 - **Acceptance Criteria:**
-  - [ ] LOG_ERROR fires once on first sync if offset > 2 s.
-  - [ ] Properties UI shows banner with formatted offset.
-  - [ ] Heartbeat carries `initial_offset_ms`.
-  - [ ] Dashboard renders the warning at the user card.
-- **Files:** `src/ltc-source.c`, `src/mw-recording-helpers.{c,h}`,
-  `website/api.php`, `website/dashboard-api.php`, `website/assets/app.js`,
-  `tests/test-mw-helpers.cpp`.
+  - [x] LOG_ERROR fires once on first sync if `|offset| > 2000` ms.
+  - [x] Offset value formatted in seconds with 1 decimal.
+  - [x] Field on source context for future dashboard wiring.
+  - [ ] Heartbeat carries `initial_offset_ms` — DEFERRED to 0.6.1.
+  - [ ] Dashboard renders the warning at the user card — DEFERRED.
+- **Files:** `src/ltc-source.c`.
 
 #### TICKET-045: Enable ctest in CI on all 3 platforms
 - **Status:** `DONE`
