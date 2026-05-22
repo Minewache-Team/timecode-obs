@@ -1097,18 +1097,25 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 - **Files:** `src/ltc-source.c`.
 
 #### TICKET-051: "Last sync N seconds ago" line on dashboard cards
-- **Status:** `TODO`
-- **Depends on:** TICKET-040 (heartbeat already carries `offset_age_sec`)
+- **Status:** `DONE`
+- **Depends on:** TICKET-040 (plugin carries `offset_age_sec`),
+  TICKET-047 (line is rendered alongside plugin_version)
 - **Type:** Feature (visibility)
-- **Description:** Frontend-only. In `renderUserCards`, add a row showing
-  "Letzte Sync: vor X s/Min", colour-coded green (<180 s), orange
-  (180–480 s), red (>480 s). Data already arrives via `offset_age_sec`
-  field added by TICKET-040.
+- **Description:** Plugin emits `offset_age_sec` since TICKET-040; server
+  now validates `[-1, 86400]` and persists to a new
+  `sessions.offset_age_sec INT NULL` column (idempotent migration).
+  Status + SSE SELECTs include the field. Dashboard renders "Letzte Sync:
+  vor X s/Min" with three colour states: green (<180 s), orange
+  (180–480 s), red (>480 s, plus the "nie gesynct" cold-start case where
+  the plugin reports -1).
 - **Acceptance Criteria:**
-  - [ ] Row renders under existing drift line.
-  - [ ] Three colour states verified.
-  - [ ] Missing field renders nothing (no console error).
-- **Files:** `website/assets/app.js`, `website/assets/style.css`.
+  - [x] Migration adds offset_age_sec column.
+  - [x] Server validates `[-1, 86400]`, junk silently dropped.
+  - [x] Status + SSE SELECTs include the field.
+  - [x] Dashboard renders three colour states + "nie gesynct" for -1.
+  - [x] Missing field renders nothing (defensive null-check).
+- **Files:** `website/install.php`, `website/api.php`, `website/sse.php`,
+  `website/assets/app.js`, `website/assets/style.css`.
 
 #### TICKET-052: Audio-drop detection during recording
 - **Status:** `TODO`

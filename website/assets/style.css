@@ -206,6 +206,21 @@ nav a.active {
     font-style: italic;
 }
 
+/* Letzte-Sync-Zeit pro User-Card (TICKET-051) */
+.user-card .sync-fresh {
+    color: #4caf50;
+    font-size: 0.85em;
+}
+.user-card .sync-stale {
+    color: #ff9800;
+    font-size: 0.85em;
+}
+.user-card .sync-old {
+    color: #f44336;
+    font-size: 0.85em;
+    font-weight: bold;
+}
+
 .user-card .name {
     font-size: 1.1rem;
     font-weight: bold;

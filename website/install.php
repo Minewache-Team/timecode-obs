@@ -91,6 +91,14 @@ try {
         $db->exec("ALTER TABLE sessions ADD COLUMN plugin_version VARCHAR(20) NULL AFTER last_recording_active");
     } catch (PDOException $e) { /* bereits vorhanden */ }
 
+    /* Epic 18: NTP-Sync-Staleness pro Session (TICKET-051). Sekunden seit
+     * dem letzten erfolgreichen NTP-Sync — vom Plugin im Heartbeat
+     * gemeldet, vom Dashboard als "Letzte Sync: vor X" gerendert. -1 = nie
+     * gesynct. */
+    try {
+        $db->exec("ALTER TABLE sessions ADD COLUMN offset_age_sec INT NULL AFTER plugin_version");
+    } catch (PDOException $e) { /* bereits vorhanden */ }
+
     echo "<h1>Installation erfolgreich!</h1>";
     echo "<p>Alle 3 Tabellen wurden angelegt:</p>";
     echo "<ul>";

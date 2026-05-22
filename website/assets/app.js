@@ -174,6 +174,30 @@
                 }
                 const versionLine = '<br><span class="' + versionCls + '">Plugin: ' + versionTxt + '</span>';
 
+                /* Letzte-Sync-Zeit (TICKET-051) — nur sichtbar bei Online,
+                 * mit Farbcode bei Staleness. -1 = nie gesynct (rot). */
+                const ageRaw = (s.offset_age_sec !== null && s.offset_age_sec !== undefined && s.offset_age_sec !== '')
+                    ? parseInt(s.offset_age_sec, 10) : null;
+                let lastSyncLine = '';
+                if (isOnline && ageRaw !== null) {
+                    let cls = 'sync-fresh';
+                    let txt;
+                    if (ageRaw < 0) {
+                        cls = 'sync-old';
+                        txt = 'nie gesynct';
+                    } else if (ageRaw < 180) {
+                        cls = 'sync-fresh';
+                        txt = 'vor ' + ageRaw + ' s';
+                    } else if (ageRaw < 480) {
+                        cls = 'sync-stale';
+                        txt = 'vor ' + Math.round(ageRaw / 60) + ' Min';
+                    } else {
+                        cls = 'sync-old';
+                        txt = 'vor ' + Math.round(ageRaw / 60) + ' Min';
+                    }
+                    lastSyncLine = '<br><span class="' + cls + '">Letzte Sync: ' + txt + '</span>';
+                }
+
                 const stopBtn = isOnline
                     ? '<button class="force-stop-btn" title="Aufnahme erzwungen beenden" onclick="event.stopPropagation();forceStop(' + s.id + ',\'' + escapeHtml(s.user_name).replace(/'/g, "\\'") + '\')">&#9632; Beenden</button>'
                     : '';
@@ -218,6 +242,7 @@
                     + ' &middot; ' + statusText
                     + '<br>' + timeLabel + ': ' + timeStr
                     + offsetLine
+                    + lastSyncLine
                     + versionLine
                     + '</div>'
                     + resyncBtn

@@ -187,6 +187,17 @@ function handle_heartbeat(array $input): void
         }
     }
 
+    /* TICKET-051: offset_age_sec — Sekunden seit dem letzten erfolgreichen
+     * NTP-Sync. -1 = nie gesynct (Cold Start). Validierter Bereich [-1, 24h]
+     * — alles ausserhalb wird verworfen (NULL = "nicht gemeldet"). */
+    $offset_age_sec = null;
+    if (isset($input['offset_age_sec']) && is_numeric($input['offset_age_sec'])) {
+        $val = (int) $input['offset_age_sec'];
+        if ($val >= -1 && $val <= 86400) {
+            $offset_age_sec = $val;
+        }
+    }
+
     $db = get_db();
 
     /* Update der LATESTEN Session des Users — auch wenn offline.
@@ -198,7 +209,8 @@ function handle_heartbeat(array $input): void
                offset_ms             = :offset,
                sync_method           = :method,
                last_recording_active = :rec,
-               plugin_version        = COALESCE(:pv, plugin_version)
+               plugin_version        = COALESCE(:pv, plugin_version),
+               offset_age_sec        = :age
          WHERE user_name = :name AND status != 'removed'
          ORDER BY id DESC
          LIMIT 1"
@@ -209,6 +221,7 @@ function handle_heartbeat(array $input): void
         ':method' => $sync_method,
         ':rec'    => $recording_active ? 1 : 0,
         ':pv'     => $plugin_version,
+        ':age'    => $offset_age_sec,
     ]);
     $updated_rows = $stmt->rowCount();
 
@@ -256,7 +269,7 @@ function handle_status(): void
         "SELECT s.id, s.user_name, s.camera_id, s.status, s.started_at, s.stopped_at,
                 s.last_heartbeat, s.offset_ms, s.sync_method,
                 s.pending_resync, s.last_recording_active,
-                s.plugin_version
+                s.plugin_version, s.offset_age_sec
          FROM sessions s
          INNER JOIN (
              SELECT user_name, MAX(id) as max_id
