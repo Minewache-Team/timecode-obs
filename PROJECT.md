@@ -1154,6 +1154,26 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
   `website/assets/app.js`, `website/assets/style.css`,
   `tests/test-mw-helpers.cpp`.
 
+#### TICKET-055: Block recording pause (was: warn only)
+- **Status:** `DONE`
+- **Depends on:** —
+- **Type:** Bug / Safety
+- **Description:** Field report (2026-05-23): pausing a recording leaves
+  a gap in the LTC audio track → DaVinci Resolve can no longer lock onto
+  the file's timecode → multi-camera sync breaks. The previous warning-
+  only handler in `on_frontend_event(OBS_FRONTEND_EVENT_RECORDING_PAUSED)`
+  ran AFTER the pause already happened. Now we call
+  `obs_frontend_recording_pause(false)` immediately on the event to
+  force-resume, plus LOG_ERROR + a modal explaining the policy. Side
+  effect: the file may have a very brief sub-second artifact (one OBS
+  frame at most) but the LTC track keeps being written, so Resolve sync
+  survives.
+- **Acceptance Criteria:**
+  - [x] Pause event triggers `obs_frontend_recording_pause(false)`.
+  - [x] LOG_ERROR + modal informing the operator.
+  - [x] Build clean.
+- **Files:** `src/mw-recording.c`.
+
 ---
 
 ## Decision Log

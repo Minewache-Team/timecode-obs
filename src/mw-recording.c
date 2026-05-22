@@ -1064,16 +1064,29 @@ static void on_frontend_event(enum obs_frontend_event event, void *data)
 	}
 
 	if (event == OBS_FRONTEND_EVENT_RECORDING_PAUSED) {
+		/* TICKET-055: pause is a hard NO for LTC timecode. A paused
+		 * recording produces an audio gap \u2192 LTC discontinuity \u2192 DaVinci
+		 * Resolve cannot lock onto the file's timecode anymore, and
+		 * cross-camera sync collapses. Previously we showed a warning
+		 * after the fact; now we force-unpause immediately so the user
+		 * cannot accidentally break their shoot. */
+		obs_log(LOG_ERROR,
+			"Recording pause was blocked by MW recording \u2014 "
+			"pausing breaks LTC timecode continuity. Use Stop "
+			"and start a new take instead.");
+		obs_frontend_recording_pause(false);
 #ifdef _WIN32
-		if (g_mw.recording_active) {
-			MessageBoxW(NULL,
-				    L"Achtung: Die Aufnahme wurde pausiert!\n\n"
-				    L"Das Pausieren der Aufnahme kann den "
-				    L"Timecode-Sync zerst\u00F6ren.\n\n"
-				    L"Bitte die Aufnahme nicht pausieren, "
-				    L"sondern stoppen und neu starten.",
-				    L"MW Aufnahme \u2013 Warnung", MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL);
-		}
+		MessageBoxW(NULL,
+			    L"Pause blockiert!\n\n"
+			    L"Das Pausieren der Aufnahme zerst\u00F6rt den "
+			    L"LTC-Timecode-Sync \u2014 DaVinci Resolve "
+			    L"kann das Material danach nicht mehr synchron "
+			    L"zusammenf\u00FChren.\n\n"
+			    L"Die Aufnahme wurde automatisch fortgesetzt.\n\n"
+			    L"Wenn du eine Pause machen willst: Aufnahme "
+			    L"STOPPEN und sp\u00E4ter NEU starten.",
+			    L"MW Aufnahme \u2013 Pause blockiert",
+			    MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL);
 #endif
 	}
 }
