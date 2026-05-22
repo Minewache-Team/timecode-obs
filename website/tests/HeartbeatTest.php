@@ -283,4 +283,64 @@ final class HeartbeatTest extends MwTestCase
         $row = $this->fetchSession($id);
         $this->assertSame('0.6.0', (string) $row['plugin_version']);
     }
+
+    /* ===== TICKET-043: sync_lost_in_session ===== */
+
+    public function test_sync_lost_stored_when_plugin_reports_true(): void
+    {
+        $id = $this->seedOnlineSession('LossUser');
+
+        $this->callHeartbeat([
+            'name' => 'LossUser',
+            'recording_active' => true,
+            'sync_lost_in_session' => true,
+        ]);
+
+        $row = $this->fetchSession($id);
+        $this->assertSame(1, (int) $row['sync_lost_in_session']);
+    }
+
+    public function test_sync_lost_is_sticky_across_heartbeats(): void
+    {
+        /* Einmal true gemeldet, muss in der DB true bleiben — auch wenn ein
+         * spaeterer Heartbeat false sendet (z.B. Plugin-Bug). Sticky-Semantik
+         * via GREATEST(). */
+        $id = $this->seedOnlineSession('StickyUser');
+
+        $this->callHeartbeat([
+            'name' => 'StickyUser',
+            'recording_active' => true,
+            'sync_lost_in_session' => true,
+        ]);
+
+        $this->callHeartbeat([
+            'name' => 'StickyUser',
+            'recording_active' => true,
+            'sync_lost_in_session' => false,
+        ]);
+
+        $row = $this->fetchSession($id);
+        $this->assertSame(1, (int) $row['sync_lost_in_session']);
+    }
+
+    public function test_sync_lost_missing_field_does_not_clear_existing(): void
+    {
+        /* Wenn das Feld fehlt (alte Plugins) darf der gespeicherte Wert
+         * nicht ueberschrieben werden. COALESCE(:sl,0) macht das. */
+        $id = $this->seedOnlineSession('LegacyLossUser');
+
+        $this->callHeartbeat([
+            'name' => 'LegacyLossUser',
+            'recording_active' => true,
+            'sync_lost_in_session' => true,
+        ]);
+
+        $this->callHeartbeat([
+            'name' => 'LegacyLossUser',
+            'recording_active' => true,
+        ]);
+
+        $row = $this->fetchSession($id);
+        $this->assertSame(1, (int) $row['sync_lost_in_session']);
+    }
 }

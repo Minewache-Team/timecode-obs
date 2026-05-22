@@ -147,6 +147,14 @@ struct ltc_source_context {
 	 * 0 = no skew detected (or NTP never succeeded). */
 	volatile int64_t initial_clock_skew_ms;
 
+	/* TICKET-043: sync-loss-during-recording sticky flag. Set to true the
+	 * first time `obs_frontend_recording_active() && consecutive_sync_failures
+	 * >= 3` was observed in the NTP sync thread. Sticky for the session —
+	 * cleared only on plugin reload. The dashboard surfaces this as a
+	 * persistent red marker on the user card so the director knows which
+	 * footage to spot-check in post. */
+	volatile bool sync_lost_in_session;
+
 	/* Edge tracking so the encoder can apply target instantly on the first
 	 * frame after the NTP thread recovers from a failure (only when not
 	 * recording — TICKET-036 contract is preserved). */
@@ -334,6 +342,23 @@ static void *ntp_sync_thread(void *data)
 			 * a stale value. */
 			if (ctx->consecutive_sync_failures >= 3)
 				ctx->first_sync_done = false;
+
+			/* TICKET-043: if we're actively recording AND we just
+			 * crossed the 3-failure threshold (i.e. NTP has been
+			 * silent for ~30 s already), mark this session as
+			 * having had a sync loss during recording. Sticky for
+			 * the rest of the plugin lifetime. */
+			if (ctx->consecutive_sync_failures >= 3 &&
+			    obs_frontend_recording_active()) {
+				if (!ctx->sync_lost_in_session) {
+					obs_log(LOG_ERROR,
+						"NTP sync was lost during an "
+						"active recording — flagging "
+						"this session for post-production "
+						"review (sync_lost_in_session=true).");
+				}
+				ctx->sync_lost_in_session = true;
+			}
 		}
 
 		/*
@@ -1038,6 +1063,7 @@ struct offset_accessor_state {
 	bool synced;
 	int64_t raw_offset_ms;
 	int offset_age_sec;
+	bool sync_lost_in_session;
 };
 
 static bool offset_accessor_cb(void *data, obs_source_t *source)
@@ -1063,6 +1089,7 @@ static bool offset_accessor_cb(void *data, obs_source_t *source)
 	st->raw_offset_ms = ctx->ntp_last_raw_offset_ms;
 	st->sync_method = (int)ctx->sync_method;
 	st->synced = ctx->ntp_synced;
+	st->sync_lost_in_session = ctx->sync_lost_in_session;
 	uint64_t last_ns = ctx->ntp_last_sync_ns;
 	if (last_ns == 0) {
 		st->offset_age_sec = -1; /* never synced */
@@ -1077,7 +1104,8 @@ static bool offset_accessor_cb(void *data, obs_source_t *source)
 
 bool ltc_source_get_current_offset(int64_t *offset_ms, int *sync_method,
 				   bool *synced, int64_t *raw_offset_ms,
-				   int *offset_age_sec)
+				   int *offset_age_sec,
+				   bool *sync_lost_in_session)
 {
 	struct offset_accessor_state st = {0};
 	obs_enum_sources(offset_accessor_cb, &st);
@@ -1093,6 +1121,8 @@ bool ltc_source_get_current_offset(int64_t *offset_ms, int *sync_method,
 			*raw_offset_ms = 0;
 		if (offset_age_sec)
 			*offset_age_sec = -1;
+		if (sync_lost_in_session)
+			*sync_lost_in_session = false;
 		return false;
 	}
 
@@ -1106,6 +1136,8 @@ bool ltc_source_get_current_offset(int64_t *offset_ms, int *sync_method,
 		*raw_offset_ms = st.raw_offset_ms;
 	if (offset_age_sec)
 		*offset_age_sec = st.offset_age_sec;
+	if (sync_lost_in_session)
+		*sync_lost_in_session = st.sync_lost_in_session;
 	return true;
 }
 

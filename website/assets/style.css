@@ -221,6 +221,23 @@ nav a.active {
     font-weight: bold;
 }
 
+/* Sync-loss-during-recording sticky Marker (TICKET-043). Persistenter
+ * roter Banner ueber dem User-Card, damit der Director nach Stop sofort
+ * sieht welche Footage in Post gegen-geprueft werden muss. */
+.user-card.sync-lost {
+    border: 2px solid #c62828;
+}
+.user-card .sync-lost-banner {
+    background: #c62828;
+    color: white;
+    padding: 4px 8px;
+    margin: -10px -10px 8px -10px;
+    border-radius: 4px 4px 0 0;
+    font-size: 0.85em;
+    font-weight: bold;
+    text-align: center;
+}
+
 .user-card .name {
     font-size: 1.1rem;
     font-weight: bold;

@@ -198,6 +198,15 @@
                     lastSyncLine = '<br><span class="' + cls + '">Letzte Sync: ' + txt + '</span>';
                 }
 
+                /* Sync-loss-during-recording sticky Marker (TICKET-043) —
+                 * sichtbar fuer ALLE Status (auch offline) sobald gesetzt,
+                 * damit der Director nach dem Stop sieht, dass die Aufnahme
+                 * verdaechtig ist. */
+                const syncLost = parseInt(s.sync_lost_in_session || 0, 10) === 1;
+                const syncLostBanner = syncLost
+                    ? '<div class="sync-lost-banner">&#9888; Sync waehrend Aufnahme verloren &mdash; bitte in Post pruefen</div>'
+                    : '';
+
                 const stopBtn = isOnline
                     ? '<button class="force-stop-btn" title="Aufnahme erzwungen beenden" onclick="event.stopPropagation();forceStop(' + s.id + ',\'' + escapeHtml(s.user_name).replace(/'/g, "\\'") + '\')">&#9632; Beenden</button>'
                     : '';
@@ -229,10 +238,13 @@
                         + label + '</button>';
                 }
 
-                const cardClass = ('user-card ' + statusClass + (offsetCls ? ' ' + offsetCls : '')).trim();
+                const cardClass = ('user-card ' + statusClass
+                    + (offsetCls ? ' ' + offsetCls : '')
+                    + (syncLost ? ' sync-lost' : '')).trim();
 
                 html += '<div class="' + cardClass + '">'
                     + '<button class="delete-btn" title="User entfernen" onclick="event.stopPropagation();deleteSession(' + s.id + ',\'' + escapeHtml(s.user_name).replace(/'/g, "\\'") + '\')">&times;</button>'
+                    + syncLostBanner
                     + '<div class="name">'
                     + '<span class="status-dot"></span>'
                     + escapeHtml(s.user_name)

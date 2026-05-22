@@ -317,16 +317,19 @@ static void *heartbeat_thread_func(void *data)
 			bool synced = false;
 			int64_t raw_offset_ms = 0;
 			int offset_age_sec = -1;
+			bool sync_lost_in_session = false;
 			bool have_offset = ltc_source_get_current_offset(
 				&offset_ms, &sync_method, &synced,
-				&raw_offset_ms, &offset_age_sec);
+				&raw_offset_ms, &offset_age_sec,
+				&sync_lost_in_session);
 
 			char body[512];
 			mw_build_heartbeat_body(body, sizeof(body), name,
 						active, have_offset, offset_ms,
 						sync_method, synced,
 						raw_offset_ms, offset_age_sec,
-						PLUGIN_VERSION);
+						PLUGIN_VERSION,
+						sync_lost_in_session);
 
 			char response[512] = {0};
 			bool ok = mw_http_post(server, "?action=heartbeat",

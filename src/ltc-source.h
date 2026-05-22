@@ -55,6 +55,11 @@ void ltc_source_register(void);
  *   offset_age_sec   — optional; whole seconds since the offset was measured,
  *                      or -1 if no successful sync has happened yet. Pass NULL
  *                      if not needed.
+ *   sync_lost_in_session — optional; true if at any point during the current
+ *                      plugin lifetime an active recording overlapped with a
+ *                      sustained NTP-sync failure. Sticky for the session
+ *                      (resets only on plugin reload). TICKET-043. Pass NULL
+ *                      if not needed.
  *
  * Returns false (and zeroes the outputs) when no LTC source exists.
  *
@@ -68,7 +73,8 @@ bool ltc_source_get_current_offset(int64_t *offset_ms,
 				   int *sync_method,
 				   bool *synced,
 				   int64_t *raw_offset_ms,
-				   int *offset_age_sec);
+				   int *offset_age_sec,
+				   bool *sync_lost_in_session);
 
 /*
  * Trigger an immediate NTP re-query on every LTC source's sync thread.

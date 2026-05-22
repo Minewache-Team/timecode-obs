@@ -39,8 +39,8 @@ extern "C" {
  * The output shape MUST stay in sync with what the PHP API expects in
  * website/api.php handle_heartbeat() — this is the contract.
  *
- *   {"name":"<n>","recording_active":<bool>[,"plugin_version":"<v>"]}
- *   {"name":"<n>","recording_active":<bool>,"offset_ms":<i64>,"sync_method":<int>,"synced":<bool>,"raw_offset_ms":<i64>,"offset_age_sec":<int>[,"plugin_version":"<v>"]}
+ *   {"name":"<n>","recording_active":<bool>[,"plugin_version":"<v>"],"sync_lost_in_session":<bool>}
+ *   {"name":"<n>","recording_active":<bool>,"offset_ms":<i64>,"sync_method":<int>,"synced":<bool>,"raw_offset_ms":<i64>,"offset_age_sec":<int>[,"plugin_version":"<v>"],"sync_lost_in_session":<bool>}
  *
  * Notes:
  *   - `name` is inserted verbatim — the caller is responsible for any escaping.
@@ -61,6 +61,10 @@ extern "C" {
  *     containing a double quote it will be dropped server-side. We don't
  *     escape here because the only producer in-tree is `PLUGIN_VERSION`,
  *     which can only contain `[0-9a-zA-Z.+-]` by CMake's project() rules.
+ *   - `sync_lost_in_session` (TICKET-043) is always emitted (never omitted)
+ *     so the dashboard can clear a previously shown red marker. true means
+ *     the plugin observed `recording_active && consecutive_sync_failures
+ *     >= 3` at least once since the source was created.
  *
  * Returns the number of characters written (excluding the null terminator),
  * or -1 on truncation/error. Buf is always null-terminated when bufsz > 0.
@@ -74,7 +78,8 @@ int mw_build_heartbeat_body(char *buf, size_t bufsz,
 			    bool synced,
 			    int64_t raw_offset_ms,
 			    int offset_age_sec,
-			    const char *plugin_version);
+			    const char *plugin_version,
+			    bool sync_lost_in_session);
 
 /*
  * Detect a director-issued re-sync command in the API response.

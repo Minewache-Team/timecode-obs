@@ -99,6 +99,14 @@ try {
         $db->exec("ALTER TABLE sessions ADD COLUMN offset_age_sec INT NULL AFTER plugin_version");
     } catch (PDOException $e) { /* bereits vorhanden */ }
 
+    /* Epic 18: Sync-loss-during-recording sticky flag (TICKET-043). 1 = das
+     * Plugin hat zu irgendeinem Zeitpunkt in dieser Plugin-Lifetime
+     * 'aufnehmend + 3 NTP-Fails hintereinander' beobachtet. Dashboard
+     * rendert das als roten persistenten Marker am User-Card. */
+    try {
+        $db->exec("ALTER TABLE sessions ADD COLUMN sync_lost_in_session TINYINT(1) NOT NULL DEFAULT 0 AFTER offset_age_sec");
+    } catch (PDOException $e) { /* bereits vorhanden */ }
+
     echo "<h1>Installation erfolgreich!</h1>";
     echo "<p>Alle 3 Tabellen wurden angelegt:</p>";
     echo "<ul>";

@@ -940,26 +940,36 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
   (optional flag).
 
 #### TICKET-043: Sync-loss-during-recording detection
-- **Status:** `TODO`
-- **Depends on:** TICKET-040
+- **Status:** `DONE` (metadata sidecar deferred to 0.6.1)
+- **Depends on:** TICKET-040, TICKET-047
 - **Type:** Feature (safety, passive)
-- **Description:** New context flag `sync_lost_during_recording` set to `true`
-  when, during active recording, `consecutive_sync_failures >= 3` AND
-  `last_successful_sync_age_sec > 60`. Plugin emits the flag in the heartbeat
-  JSON additively. On `OBS_FRONTEND_EVENT_RECORDING_STOPPED`, if flag was
-  set, write a `sync_loss_periods: [{start,end}]` array to the metadata
-  sidecar. Passive — no UI dialog, no abort, no eingriff in the recording
-  pipeline.
+- **Description:** Sticky `sync_lost_in_session` flag on the source
+  context. Set to `true` the first time
+  `obs_frontend_recording_active() && consecutive_sync_failures >= 3` is
+  observed in the NTP sync thread (LOG_ERROR also fires). Sticky for the
+  whole plugin lifetime — never cleared without a reload — so the
+  director can spot it on the dashboard after the recording has stopped
+  and the camera is offline. Exposed via the extended
+  `ltc_source_get_current_offset` signature, emitted on every heartbeat
+  (always — explicit `false` clears any prior badge after a reload).
+  Server uses `GREATEST(sync_lost_in_session, COALESCE(:sl, 0))` so the
+  DB value is also sticky; missing field never clears existing flag.
+  Dashboard renders a persistent red banner above the card + a red
+  border. Metadata-sidecar wiring (`sync_loss_periods` JSON) deferred to
+  0.6.1 to keep this release scope-bounded.
 - **Acceptance Criteria:**
-  - [ ] Flag goes true when conditions met during recording.
-  - [ ] Heartbeat JSON additively carries the field.
-  - [ ] Sidecar records the loss interval(s).
-  - [ ] Server validates + persists.
-  - [ ] Dashboard shows persistent red marker on the user card.
-- **Files:** `src/ltc-source.c`, `src/mw-recording.c`,
-  `src/mw-recording-helpers.{c,h}`, `src/metadata-writer.c`, `website/api.php`,
-  `website/install.php`, `website/dashboard-api.php`, `website/assets/app.js`,
-  `tests/test-mw-helpers.cpp`, `website/tests/HeartbeatTest.php`.
+  - [x] Flag set in plugin when conditions met.
+  - [x] Heartbeat JSON carries the field (always, never omitted).
+  - [x] Server validates + persists with sticky semantics.
+  - [x] Dashboard shows persistent red banner + red border.
+  - [x] 3 new gtest cases (sync_lost_in_session field shape).
+  - [x] 3 new PHPUnit tests (stored, sticky, missing-field-preserves).
+  - [ ] Metadata sidecar `sync_loss_periods` — DEFERRED.
+- **Files:** `src/ltc-source.{c,h}`, `src/mw-recording.c`,
+  `src/mw-recording-helpers.{c,h}`, `website/api.php`,
+  `website/install.php`, `website/sse.php`, `website/assets/app.js`,
+  `website/assets/style.css`, `tests/test-mw-helpers.cpp`,
+  `website/tests/HeartbeatTest.php`.
 
 #### TICKET-044: PC clock skew warning on first NTP sync
 - **Status:** `DONE` (log-only for 0.6.0; dashboard wiring deferred)

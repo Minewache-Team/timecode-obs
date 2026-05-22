@@ -198,6 +198,16 @@ function handle_heartbeat(array $input): void
         }
     }
 
+    /* TICKET-043: sync_lost_in_session — sticky boolean (true = das Plugin
+     * hat waehrend dieser Lifetime mindestens einmal 'recording + 3 NTP-Fails'
+     * gesehen). Sticky: einmal true gemeldet bleibt es so bis das Plugin neu
+     * geladen wird. Wir benutzen daher 1=true ODER bestehender DB-Wert; ein
+     * fehlendes Feld setzt den Wert NICHT zurueck. */
+    $sync_lost_value = null;
+    if (isset($input['sync_lost_in_session'])) {
+        $sync_lost_value = ((bool) $input['sync_lost_in_session']) ? 1 : 0;
+    }
+
     $db = get_db();
 
     /* Update der LATESTEN Session des Users — auch wenn offline.
@@ -210,7 +220,8 @@ function handle_heartbeat(array $input): void
                sync_method           = :method,
                last_recording_active = :rec,
                plugin_version        = COALESCE(:pv, plugin_version),
-               offset_age_sec        = :age
+               offset_age_sec        = :age,
+               sync_lost_in_session  = GREATEST(sync_lost_in_session, COALESCE(:sl, 0))
          WHERE user_name = :name AND status != 'removed'
          ORDER BY id DESC
          LIMIT 1"
@@ -222,6 +233,7 @@ function handle_heartbeat(array $input): void
         ':rec'    => $recording_active ? 1 : 0,
         ':pv'     => $plugin_version,
         ':age'    => $offset_age_sec,
+        ':sl'     => $sync_lost_value,
     ]);
     $updated_rows = $stmt->rowCount();
 
@@ -269,7 +281,8 @@ function handle_status(): void
         "SELECT s.id, s.user_name, s.camera_id, s.status, s.started_at, s.stopped_at,
                 s.last_heartbeat, s.offset_ms, s.sync_method,
                 s.pending_resync, s.last_recording_active,
-                s.plugin_version, s.offset_age_sec
+                s.plugin_version, s.offset_age_sec,
+                s.sync_lost_in_session
          FROM sessions s
          INNER JOIN (
              SELECT user_name, MAX(id) as max_id
