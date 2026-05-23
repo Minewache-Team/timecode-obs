@@ -8,7 +8,12 @@
  */
 
 require_once __DIR__ . '/includes/db.php';
+require_once __DIR__ . '/includes/latest_version.php';
 require_dashboard_auth();
+
+/* Latest known plugin version: holt sich automatisch von GitHub Releases
+ * (1 h Cache), faellt auf hardcoded Wert zurueck wenn GitHub down. */
+$mw_latest_plugin_version = get_latest_plugin_version();
 ?>
 <!DOCTYPE html>
 <html lang="de">
@@ -80,11 +85,12 @@ require_dashboard_auth();
     <div class="toast" id="toast"></div>
 
     <script>
-        /* TICKET-047: Aktuelle bekannte Plugin-Version. Wird beim Release
-         * zusammen mit buildspec.json bewusst hier gepinnt. Veraltete Plugins
-         * werden im Dashboard orange markiert. Leere Zeichenkette = Pruefung
-         * deaktiviert. */
-        window.MW_LATEST_PLUGIN_VERSION = '0.6.1';
+        /* TICKET-047 + TICKET-058: Aktuelle bekannte Plugin-Version. Wird
+         * automatisch von GitHub Releases (Minewache-Filter) geholt mit 1 h
+         * Cache. Manueller Override moeglich via MW_FALLBACK_LATEST_VERSION
+         * in config.php. Leere Zeichenkette = Pruefung deaktiviert.
+         * Implementation: website/includes/latest_version.php */
+        window.MW_LATEST_PLUGIN_VERSION = <?= json_encode($mw_latest_plugin_version) ?>;
     </script>
     <script src="assets/app.js?v=4"></script>
 </body>

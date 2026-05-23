@@ -38,6 +38,10 @@
 /website/vendor/
 /website/.phpunit.cache/
 
+# TICKET-058: GitHub-fetched latest-version cache (1 h TTL). Server-side
+# auto-refresh; never check into the repo.
+/website/.latest_version_cache
+
 # Exclude lock files
 *.lock.json
 
