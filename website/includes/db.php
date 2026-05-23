@@ -11,6 +11,16 @@ if (!defined('DB_HOST')) {
     require_once __DIR__ . '/config.php';
 }
 
+/* 0.6.1: Defensive default for HEARTBEAT_TIMEOUT — field report showed
+ * killed OBS instances staying "online" on the director dashboard
+ * indefinitely after task-manager kill. The heartbeat interval is fixed
+ * at 30 s in the plugin, so 60 s gives one full miss + grace and is
+ * the right "stale" threshold for a live shoot. If config.php already
+ * sets the constant, this is a no-op. */
+if (!defined('HEARTBEAT_TIMEOUT')) {
+    define('HEARTBEAT_TIMEOUT', 60);
+}
+
 function get_db(): PDO
 {
     static $pdo = null;

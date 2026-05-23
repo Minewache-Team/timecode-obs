@@ -13,7 +13,7 @@
 | Name             | obs-ltc-timecode                           |
 | Type             | OBS Studio C/C++ Plugin (native)           |
 | Purpose          | NTP-synced LTC timecode audio source       |
-| Current Version  | 0.6.0 (Minewache branch)                   |
+| Current Version  | 0.6.1 (Minewache branch)                   |
 | Target Platforms | Windows 10+ (x64), Linux (Ubuntu 24.04+)  |
 | OBS SDK Version  | 32.x (current stable)                      |
 | License          | GPLv2+ / GPL-2.0-or-later (OBS compat)    |
@@ -1166,24 +1166,47 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
   `website/assets/style.css`.
 
 #### TICKET-055: Block recording pause (was: warn only)
-- **Status:** `DONE`
+- **Status:** `ROLLED BACK in 0.6.1 (see TICKET-056) — currently warn-only`
 - **Depends on:** —
 - **Type:** Bug / Safety
 - **Description:** Field report (2026-05-23): pausing a recording leaves
   a gap in the LTC audio track → DaVinci Resolve can no longer lock onto
   the file's timecode → multi-camera sync breaks. The previous warning-
   only handler in `on_frontend_event(OBS_FRONTEND_EVENT_RECORDING_PAUSED)`
-  ran AFTER the pause already happened. Now we call
+  ran AFTER the pause already happened. Initial fix called
   `obs_frontend_recording_pause(false)` immediately on the event to
-  force-resume, plus LOG_ERROR + a modal explaining the policy. Side
-  effect: the file may have a very brief sub-second artifact (one OBS
-  frame at most) but the LTC track keeps being written, so Resolve sync
-  survives.
-- **Acceptance Criteria:**
-  - [x] Pause event triggers `obs_frontend_recording_pause(false)`.
-  - [x] LOG_ERROR + modal informing the operator.
-  - [x] Build clean.
+  force-resume, plus LOG_ERROR + a modal explaining the policy.
+- **Why rolled back:** field-reproduced deadlock (2026-05-23, ~2 h after
+  0.6.0 tag) — calling `obs_frontend_recording_pause(false)` from inside
+  the frontend event callback caused the subsequent Stop transition to
+  hang ("Aufnahme wird beendet" indefinitely). Re-entrancy into the OBS
+  frontend API from an event handler is not safe. 0.6.1 reverts to
+  warning-only; the proper fix (deferred force-resume via a separate
+  thread or QTimer-style mechanism) is a separate follow-up.
 - **Files:** `src/mw-recording.c`.
+
+#### TICKET-056: Hotfix — revert pause force-resume + defensive HEARTBEAT_TIMEOUT default
+- **Status:** `DONE` (shipped as 0.6.1)
+- **Depends on:** TICKET-055
+- **Type:** Bug / Hotfix
+- **Description:** Two field-reported regressions discovered ~2 h after
+  0.6.0 tag:
+  1. **Pause-block deadlock** — see TICKET-055. Reverted to
+     warning-only modal; LOG level downgraded to LOG_WARNING since
+     pause is no longer being prevented.
+  2. **Dashboard never showed killed users as offline.** Cause was
+     `HEARTBEAT_TIMEOUT` in the production `config.php` set to an
+     unreasonably high value (or possibly not defined at all — the
+     constant is gitignored). Added defensive default in `db.php`:
+     `if (!defined('HEARTBEAT_TIMEOUT')) define('HEARTBEAT_TIMEOUT', 60)`.
+     60 s = one full 30 s plugin heartbeat miss + 30 s grace, which is
+     the right "stale" threshold for a live shoot.
+- **Acceptance Criteria:**
+  - [x] Pause no longer triggers any frontend-API re-entrancy.
+  - [x] Subsequent Stop after Pause works (no deadlock).
+  - [x] Stale-user detection kicks in within ~60 s of a killed plugin.
+- **Files:** `src/mw-recording.c`, `website/includes/db.php`,
+  `buildspec.json`, `PROJECT.md`.
 
 ---
 
@@ -1250,6 +1273,8 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 | 2026-05-23 | TICKET-055 | Block recording pause by calling `obs_frontend_recording_pause(false)` immediately in the PAUSED handler | Pause leaves a gap in the LTC track, which is exactly the kind of discontinuity that breaks DaVinci Resolve's timecode lock — the very thing we're shipping LTC to prevent. Force-resume is a brief artifact (~one OBS frame); leaving the user paused would be catastrophic for the take. The modal informs them so they don't think it's a bug. | Warn-only (was the broken state we're fixing), block at OBS level (not a public API), prevent pause via a custom OBS hotkey override (much larger surface area). |
 | 2026-05-23 | TICKET-048 | Re-consent path: decline clears `consent_given` but leaves LTC source functional | The LTC audio track is the core safety feature — declining MW telemetry shouldn't lock the user out of timecode generation. Consistent with the original decline-from-scratch path. The plugin logs the decline so post-hoc audit is possible. | Disable everything on decline (over-broad), retain old consent (defeats the re-consent purpose), require an explicit re-decline action (adds friction). |
 | 2026-05-23 | Epic 18 | Cold-start modal (TICKET-042), integration test (TICKET-046) and audio-drop detection (TICKET-052) deferred to 0.6.1 | "No risks for tomorrow" mandate from the user. Cold-start modal touches the recording-start codepath — even flag-gated it adds review surface that we don't have time to validate in lab. Integration test would have been nice but existing unit coverage + manual verification before the shoot are sufficient. Audio-drop detection is partially addressed by TICKET-055 (pause-block). All three have documented future work in PROJECT.md. | Ship them all (release-blocking risk), drop them entirely (loses follow-up signal). |
+| 2026-05-23 | TICKET-056 | Roll back pause force-resume (TICKET-055), keep warning-only | Field-reproduced deadlock within ~2 h of 0.6.0 tag: calling `obs_frontend_recording_pause(false)` from inside the OBS frontend event callback caused the subsequent Stop transition to hang indefinitely. Re-entrancy into the frontend API from an event handler is not safe (no public docs confirm this either way, but the deadlock is reproducible). Warning-only is what 0.5.x shipped without incident. Future work: defer force-resume to a separate thread or async timer, then re-enable. | Try a small `os_sleep_ms` before the resume (still re-enters frontend API; likely same deadlock), keep the broken behaviour with a workaround for stuck-stop (no clean recovery path exists), drop the warning entirely (loses important signal). |
+| 2026-05-23 | TICKET-056 | Defensive `HEARTBEAT_TIMEOUT` default of 60 s in `db.php` | Production `config.php` was set to an unreasonably high value (or possibly not defined at all — the file is gitignored so we can't audit it from the repo). Killed plugins stayed "online" on the dashboard for the entire shoot, which is exactly the visibility regression the director cannot afford. 60 s = one plugin heartbeat interval (30 s) + one full miss + grace, matching the field intuition of "near-instant after kill". User-defined value in `config.php` still wins; this is a safety net for the case where the constant is missing. | Hardcode an even shorter timeout (false positives on transient network blips), pass via env var (more configuration surface), make heartbeat thread send more often (network load × 15 users for marginal latency win). |
 
 ---
 
@@ -1257,6 +1282,7 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 | Session | Date | Agent | Tickets Worked | Status at End | Notes |
 |---------|------|-------|----------------|---------------|-------|
+| 20 | 2026-05-23 | Claude Opus 4.7 (1M) | TICKET-055 (rolled back), TICKET-056 (done) | 0.6.1 hotfix shipped | Field-reproduced ~2 h after 0.6.0 tag: (a) TICKET-055 force-resume from inside `OBS_FRONTEND_EVENT_RECORDING_PAUSED` deadlocks the subsequent Stop ("Aufnahme wird beendet" hangs indefinitely) — re-entrancy into the OBS frontend API from an event callback is not safe. Reverted to warning-only modal (matches 0.5.x behaviour). (b) Killed OBS instances stayed "online" on the dashboard because `HEARTBEAT_TIMEOUT` constant was likely undefined or set too high in the production `config.php` (gitignored, can't see it). Added defensive `if (!defined('HEARTBEAT_TIMEOUT')) define(..., 60)` in `db.php` — 60 s = one full 30 s plugin heartbeat miss + 30 s grace. Files: `src/mw-recording.c`, `website/includes/db.php`. Build clean on Windows. |
 | 19 | 2026-05-23 | Claude Opus 4.7 (1M) | TICKET-043, TICKET-044, TICKET-045, TICKET-047, TICKET-048, TICKET-049, TICKET-050, TICKET-051, TICKET-055 (all done); TICKET-042, TICKET-046, TICKET-052 (deferred to 0.6.1) | Epic 18 shipped as 0.6.0 | Trust the Timecode release. Brutally honest sync-robustness audit of 0.5.1 found 8 real gaps; this release addresses 5 of them and defers 3 with documented reasoning. Highlights: (1) **Plugin-Version end-to-end** (TICKET-047) — user's primary ask: each user card now shows "Plugin: v0.6.0" with green/orange/grey state against window.MW_LATEST_PLUGIN_VERSION pinned in index.php. Migration + validation + PHPUnit tests round-trip. (2) **Last-sync-age** (TICKET-051) — `offset_age_sec` now persisted, rendered as "Letzte Sync: vor X" with green/orange/red staleness. (3) **Sync-loss-during-recording sticky flag** (TICKET-043) — plugin sets `sync_lost_in_session` true when `recording_active && consecutive_sync_failures>=3` is seen in the NTP thread; sticky for the lifetime; server uses GREATEST() for sticky DB persistence; dashboard renders red border + banner. (4) **NTP cold-start burst + jitter** (TICKET-049+050) — cycles 1-3 run 2s apart, 4-5 ten seconds apart, 6+ standard interval; first-query random jitter 0-10s prevents 15 simultaneous startups from spiking one server. Reduces cold-start risk window from one full interval (300s) to ~36s. (5) **ctest in CI** (TICKET-045) — 5 test binaries were compiled but never run on Windows/Ubuntu/macOS; now invoked on every push (continue-on-error for 0.6.0 so a test flake can't block release artifact). (6) **PC clock skew warning** (TICKET-044) — LOG_ERROR fires on first sync when initial offset > 2s with remediation hint. (7) **Datenschutz update + re-consent** (TICKET-048) — Section 3 table gets 3 new rows + corrected Kamera-ID range A–P; plugin has new MW_CURRENT_CONSENT_VERSION=2; users with consent_version<2 get re-prompted on next start. Decline path leaves LTC working locally, only stops the heartbeat. (8) **Hard-block recording pause** (TICKET-055) — field-report bug: pausing produces an LTC gap, breaking DaVinci sync. Was warn-only; now force-resumes via `obs_frontend_recording_pause(false)`. Tests: 5/5 ctest suites green locally on Windows; 6 new gtest cases (sync_lost_in_session + plugin_version field shapes); 8 new PHPUnit cases (validation, sticky persistence, COALESCE-preserves-existing). Deferrals: cold-start modal (TICKET-042 — burst mode shrinks the cold-start risk window, modal can wait), integration test harness (TICKET-046 — existing unit coverage + manual lab verification before tomorrow's shoot are sufficient), audio-drop detection (TICKET-052 — TICKET-055 handles the most common case). Commits are 1-per-ticket for easy revertability if any specific change misbehaves in the field. |
 | 18 | 2026-05-20 | Claude Opus 4.7 (1M) | TICKET-040 (done), TICKET-041 (created) | TICKET-040 DONE; TICKET-041 TODO (deferred dashboard UI) | Epic 17: NTP robustness + drift recovery. (1) Built-in NTP fallback chain: user-server → time.cloudflare.com → time.google.com → HTTP Date → degraded. (2) Loud warning when degraded: `ntp_synced=false` now propagates (was the silent-degradation bug — heartbeat used to report green while local clock drifted); LOG_ERROR on transition + 60 s throttled; new `NTPDegradedWarning` red banner in Properties; after 3 failures `first_sync_done` resets to avoid stale-offset poisoning. (3) Slewing replaces EMA + hard-resync: new pure `ntp_slew_step()` in `ntp-client.c` (7 unit tests covering zero/within/exceeds/large-int64/no-op cases); `encode_next_frame` slews `ntp_offset_ms_applied` toward `ntp_target_offset_ms` at 1 ms/frame recording / 10 ms/frame idle, and `ltc_wrapper_set_timecode`s every frame; deleted `tc_to_total_frames`, `sync_ref_*`, `RESYNC_*`, `EMA_ALPHA`, inc_timecode+drift-check branches; on idle NTP recovery applied jumps to target (instant resync feel for the director); TICKET-036 server+plugin gating during recording untouched. (4) `offset_accessor_cb` returns raw + age, not the slewed value, so the dashboard reflects actual measurement quality. (5) Heartbeat JSON additively carries `raw_offset_ms` + `offset_age_sec` (3 new test cases); dashboard UI deferred to TICKET-041. Tests on Linux toolchain: 7/7 new NTPSlewStep cases green, 13/13 BuildHeartbeatBody cases green (3 new), 11/11 ResponseHasResync cases unchanged; ltc-source.c + mw-recording.c syntax-clean with OBS stub. Full OBS-linked build deferred to CI runners (no OBS SDK in dev container). |
 | 17 | 2026-05-13 | Claude Opus 4.7 (1M) | End-to-end Verifizierung | 17/17 PHPUnit, 14/14 smoke assertions PASS | Erstes End-to-end-Run der Epic-16-Tests gegen die Docker-MariaDB hat zwei echte Production-Bugs aufgedeckt: (1) `db.php` machte `require_once 'config.php'` unbedingt — was im Test-Modus failt weil `config.php` gitignored ist und durch `config-test.php` ersetzt wird. Fix: `if (!defined('DB_HOST'))`-Guard. (2) `handle_heartbeat` gated die Resync-Auslieferung auf `$updated_rows > 0`, aber MariaDB's `rowCount()` zaehlt CHANGED rows, nicht MATCHED rows — bei einem idempotenten Heartbeat (alle Werte schon korrekt) war das 0 und der Resync wurde nicht geliefert. Fix: `PDO::MYSQL_ATTR_FOUND_ROWS => true` in den Connection-Optionen. Beide Bugs waren in der manuellen Verifizierung der Session 14 nicht aufgefallen weil dort jeder Heartbeat einen neuen Offset hatte. Bonus: TICKET-038 hat funktioniert wie versprochen — die Tests haben das gefangen, nicht ein Production-Incident. Auch `.gitignore` erweitert um `/scripts`, `docker-compose.test.yml`, `/website/vendor/`, `/website/.phpunit.cache/`. |

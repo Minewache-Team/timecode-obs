@@ -1102,28 +1102,29 @@ static void on_frontend_event(enum obs_frontend_event event, void *data)
 	}
 
 	if (event == OBS_FRONTEND_EVENT_RECORDING_PAUSED) {
-		/* TICKET-055: pause is a hard NO for LTC timecode. A paused
-		 * recording produces an audio gap \u2192 LTC discontinuity \u2192 DaVinci
-		 * Resolve cannot lock onto the file's timecode anymore, and
-		 * cross-camera sync collapses. Previously we showed a warning
-		 * after the fact; now we force-unpause immediately so the user
-		 * cannot accidentally break their shoot. */
-		obs_log(LOG_ERROR,
-			"Recording pause was blocked by MW recording \u2014 "
-			"pausing breaks LTC timecode continuity. Use Stop "
-			"and start a new take instead.");
-		obs_frontend_recording_pause(false);
+		/* TICKET-055 (revised in 0.6.1): force-resume from inside the
+		 * OBS frontend event callback caused a re-entrancy deadlock \u2014
+		 * the subsequent Stop got stuck in "Aufnahme wird beendet".
+		 * Rolled back to a warning-only behaviour (same as 0.5.x). The
+		 * LTC discontinuity risk is documented; future work could
+		 * defer the force-resume to a separate timer/thread, but for
+		 * this release we accept the warning-only contract.
+		 * Field-confirmed deadlock 2026-05-23 \u2014 see Decision Log. */
+		obs_log(LOG_WARNING,
+			"Recording was paused \u2014 pausing breaks LTC timecode "
+			"continuity. Use Stop and start a new take instead. "
+			"(Pause-block disabled in 0.6.1 to avoid OBS stop "
+			"deadlock; warning-only.)");
 #ifdef _WIN32
 		MessageBoxW(NULL,
-			    L"Pause blockiert!\n\n"
+			    L"Achtung: Die Aufnahme wurde pausiert!\n\n"
 			    L"Das Pausieren der Aufnahme zerst\u00F6rt den "
-			    L"LTC-Timecode-Sync \u2014 DaVinci Resolve "
-			    L"kann das Material danach nicht mehr synchron "
+			    L"LTC-Timecode-Sync \u2014 DaVinci Resolve kann das "
+			    L"Material danach nicht mehr synchron "
 			    L"zusammenf\u00FChren.\n\n"
-			    L"Die Aufnahme wurde automatisch fortgesetzt.\n\n"
-			    L"Wenn du eine Pause machen willst: Aufnahme "
+			    L"Bitte die Aufnahme nicht pausieren, sondern "
 			    L"STOPPEN und sp\u00E4ter NEU starten.",
-			    L"MW Aufnahme \u2013 Pause blockiert",
+			    L"MW Aufnahme \u2013 Warnung",
 			    MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL);
 #endif
 	}
