@@ -1170,6 +1170,43 @@ int ltc_source_kick_resync(void)
 	return count;
 }
 
+/* TICKET-059: signal recording stopped — sets the edge-trigger so the
+ * encoder applies the latest NTP target instantly on the next idle frame.
+ * Closes the "50 s offset persists across takes" gap that slewing alone
+ * (max 10 ms/frame idle) cannot bridge in a normal between-takes window. */
+static bool signal_recording_stopped_cb(void *data, obs_source_t *source)
+{
+	int *count = data;
+	if (!source)
+		return true;
+
+	const char *src_id = obs_source_get_id(source);
+	if (!src_id || strcmp(src_id, "obs_ltc_timecode_source") != 0)
+		return true;
+
+	struct ltc_source_context *ctx =
+		(struct ltc_source_context *)obs_obj_get_data(source);
+	if (!ctx)
+		return true;
+
+	/* Only meaningful if we have a target to jump to. If no NTP sync
+	 * has ever succeeded, leave the flag alone — the encoder's
+	 * `initial_sync` path already handles that case via !first_sync_done. */
+	if (!ctx->first_sync_done)
+		return true;
+
+	ctx->ntp_sync_recovered_edge = true;
+	(*count)++;
+	return true;
+}
+
+int ltc_source_signal_recording_stopped(void)
+{
+	int count = 0;
+	obs_enum_sources(signal_recording_stopped_cb, &count);
+	return count;
+}
+
 void ltc_source_register(void)
 {
 	obs_register_source(&ltc_source_info);

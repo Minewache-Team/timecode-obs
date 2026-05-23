@@ -1093,6 +1093,17 @@ static void on_frontend_event(enum obs_frontend_event event, void *data)
 		g_mw.recording_active = false;
 		pthread_mutex_unlock(&g_mw.mutex);
 
+		/* TICKET-059: as soon as recording stops, ask each LTC source
+		 * to apply the current NTP target offset instantly on the next
+		 * idle frame, instead of slewing at 10 ms/frame. Fixes the
+		 * "50 s offset persists across takes" bug — slewing alone
+		 * cannot close a multi-second clock-skew gap in a normal
+		 * between-takes window, so without this the next recording
+		 * would start with a still-wrong applied offset. The jump
+		 * happens while no file is being written, so no LTC
+		 * discontinuity ends up on disk. */
+		ltc_source_signal_recording_stopped();
+
 		if (was_active) {
 			mw_send_stop();
 			/* Heartbeat thread keeps running so any queued

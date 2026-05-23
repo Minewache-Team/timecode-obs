@@ -88,6 +88,27 @@ bool ltc_source_get_current_offset(int64_t *offset_ms,
  */
 int ltc_source_kick_resync(void);
 
+/*
+ * Signal that an OBS recording just stopped (TICKET-059).
+ *
+ * Sets `ntp_sync_recovered_edge = true` on every LTC source so the
+ * encoder applies the current NTP target offset INSTANTLY on the next
+ * non-recording frame, instead of slewing at 10 ms/frame. Fixes the
+ * "50 s offset persists across takes" field bug: a PC clock that's
+ * wildly wrong (Windows Time service broken, manual misconfiguration)
+ * produces an NTP offset that slewing alone cannot close within a
+ * normal between-takes window — so the next recording starts with a
+ * still-mostly-wrong applied offset.
+ *
+ * Discontinuity is acceptable here because:
+ *   - The jump happens while no recording is being written
+ *   - Next recording begins with a fresh, correct applied baseline
+ *   - Resolve never sees a TC jump inside any single file
+ *
+ * Safe to call from any thread. Returns the number of sources signalled.
+ */
+int ltc_source_signal_recording_stopped(void);
+
 #ifdef __cplusplus
 }
 #endif
