@@ -19,7 +19,7 @@
  */
 
 define('MW_LATEST_VERSION_CACHE_TTL', 3600);
-define('MW_LATEST_VERSION_HARDCODED_FALLBACK', '0.6.1');
+define('MW_LATEST_VERSION_HARDCODED_FALLBACK', '0.6.2');
 
 function _mw_latest_version_cache_path(): string
 {
