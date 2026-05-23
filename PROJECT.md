@@ -1185,6 +1185,24 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
   thread or QTimer-style mechanism) is a separate follow-up.
 - **Files:** `src/mw-recording.c`.
 
+#### TICKET-057: Server-only fix — preserve plugin_version across handle_start
+- **Status:** `DONE` (server-only, no plugin rebuild needed)
+- **Depends on:** TICKET-047
+- **Type:** Bug
+- **Description:** Field report (2026-05-23): when a user starts a new
+  recording, the dashboard shows "Plugin V nicht gefunden" for ~30 s
+  until the first heartbeat arrives. Cause: `handle_start` inserts a
+  fresh session row without copying `plugin_version` from the previous
+  session. The next heartbeat fills it via the COALESCE UPDATE, but
+  during the 30 s gap the dashboard reads NULL on the latest row.
+  Fix: extend the existing `pending_resync` SELECT to also fetch
+  `plugin_version`, then include it in the INSERT. First heartbeat
+  still wins; this just bridges the gap.
+- **Acceptance Criteria:**
+  - [x] handle_start copies plugin_version from previous session row.
+  - [x] PHP lint clean.
+- **Files:** `website/api.php`.
+
 #### TICKET-056: Hotfix — revert pause force-resume + defensive HEARTBEAT_TIMEOUT default
 - **Status:** `DONE` (shipped as 0.6.1)
 - **Depends on:** TICKET-055

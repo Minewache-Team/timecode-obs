@@ -82,16 +82,23 @@ function handle_start(array $input): void
 
     $db = get_db();
 
-    /* Pending Resync-Flag der letzten Session uebernehmen (TICKET-036).
-     * Verhindert dass Director-Resync-Anfragen verloren gehen, wenn der
-     * User zwischen Klick und Lieferung eine neue Aufnahme startet. */
+    /* Pending Resync-Flag UND zuletzt bekannte plugin_version aus der
+     * letzten Session uebernehmen (TICKET-036, TICKET-057).
+     * Verhindert (1) dass Director-Resync-Anfragen verloren gehen, wenn der
+     * User zwischen Klick und Lieferung eine neue Aufnahme startet, und
+     * (2) dass das Dashboard zwischen Aufnahme-Start und erstem Heartbeat
+     * (~30 s) "Plugin V nicht gefunden" zeigt — der naechste Heartbeat
+     * ueberschreibt das Feld eh, aber bis dahin haben wir den letzten
+     * bekannten Wert statt einer Luecke. */
     $stmt = $db->prepare(
-        "SELECT pending_resync FROM sessions
+        "SELECT pending_resync, plugin_version FROM sessions
           WHERE user_name = :name AND status != 'removed'
           ORDER BY id DESC LIMIT 1"
     );
     $stmt->execute([':name' => $name]);
-    $prev_pending = (int) ($stmt->fetchColumn() ?: 0);
+    $prev = $stmt->fetch();
+    $prev_pending = (int) ($prev['pending_resync'] ?? 0);
+    $prev_version = $prev['plugin_version'] ?? null;
 
     /* Falls der User bereits online ist, zuerst alte Session schließen */
     $stmt = $db->prepare(
@@ -102,15 +109,18 @@ function handle_start(array $input): void
 
     /* Neue Session anlegen — last_recording_active=1, weil eine Aufnahme
      * gerade startet. Ggf. uebernommenes pending_resync wird beim naechsten
-     * Idle-Heartbeat (nach Stop) ausgeliefert. */
+     * Idle-Heartbeat (nach Stop) ausgeliefert. plugin_version wird vom
+     * naechsten Heartbeat ueberschrieben, ist aber als Fallback drin damit
+     * das Dashboard nicht 30 s "v? (nicht gemeldet)" zeigt. */
     $stmt = $db->prepare(
-        "INSERT INTO sessions (user_name, camera_id, status, started_at, last_heartbeat, pending_resync, last_recording_active)
-         VALUES (:name, :camera, 'online', NOW(), NOW(), :pending, 1)"
+        "INSERT INTO sessions (user_name, camera_id, status, started_at, last_heartbeat, pending_resync, last_recording_active, plugin_version)
+         VALUES (:name, :camera, 'online', NOW(), NOW(), :pending, 1, :pv)"
     );
     $stmt->execute([
         ':name'    => $name,
         ':camera'  => $camera,
         ':pending' => $prev_pending,
+        ':pv'      => $prev_version,
     ]);
 
     json_response([
