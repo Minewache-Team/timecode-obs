@@ -71,6 +71,19 @@ bool ntp_query(const char *server, int timeout_ms, ntp_result_t *result);
  */
 void ntp_corrected_time(int64_t offset_ms, int64_t *out_sec, int64_t *out_usec);
 
+/*
+ * Move `applied_ms` one step toward `target_ms`, clamped to ±max_step_ms.
+ * Returns the new applied value. Pure arithmetic; no side effects.
+ *
+ * Used by the LTC encoder loop to slew the applied NTP offset toward the
+ * latest raw measurement without producing TC discontinuities. Keeping this
+ * standalone (no OBS / threading deps) lets us unit-test the convergence
+ * math directly — mirrors the testable-core pattern used elsewhere.
+ *
+ * max_step_ms <= 0 is treated as a no-op (returns applied_ms unchanged).
+ */
+int64_t ntp_slew_step(int64_t applied_ms, int64_t target_ms, int64_t max_step_ms);
+
 #ifdef __cplusplus
 }
 #endif

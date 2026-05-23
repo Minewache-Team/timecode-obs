@@ -59,3 +59,62 @@ TEST(NTPOffsetTest, QueryNullParams)
 	EXPECT_FALSE(ntp_query(nullptr, 2000, &result));
 	EXPECT_FALSE(ntp_query("pool.ntp.org", 2000, nullptr));
 }
+
+/* ---- ntp_slew_step ---- */
+
+TEST(NTPSlewStep, ZeroDiffIsNoOp)
+{
+	EXPECT_EQ(ntp_slew_step(0, 0, 1), 0);
+	EXPECT_EQ(ntp_slew_step(500, 500, 10), 500);
+	EXPECT_EQ(ntp_slew_step(-12345, -12345, 100), -12345);
+}
+
+TEST(NTPSlewStep, WithinStepSnapsToTarget)
+{
+	EXPECT_EQ(ntp_slew_step(0, 5, 10), 5);    /* +5 < +10 step */
+	EXPECT_EQ(ntp_slew_step(100, 95, 10), 95); /* -5 within step */
+	EXPECT_EQ(ntp_slew_step(0, 10, 10), 10);   /* exactly at step boundary */
+	EXPECT_EQ(ntp_slew_step(0, -10, 10), -10);
+}
+
+TEST(NTPSlewStep, ExceedsStepPositiveDirection)
+{
+	EXPECT_EQ(ntp_slew_step(0, 5000, 1), 1);
+	EXPECT_EQ(ntp_slew_step(0, 5000, 10), 10);
+	EXPECT_EQ(ntp_slew_step(100, 5000, 1), 101);
+}
+
+TEST(NTPSlewStep, ExceedsStepNegativeDirection)
+{
+	EXPECT_EQ(ntp_slew_step(0, -5000, 1), -1);
+	EXPECT_EQ(ntp_slew_step(0, -5000, 10), -10);
+	EXPECT_EQ(ntp_slew_step(100, -5000, 1), 99);
+}
+
+TEST(NTPSlewStep, MaxStepZeroOrNegativeIsNoOp)
+{
+	EXPECT_EQ(ntp_slew_step(100, 500, 0), 100);
+	EXPECT_EQ(ntp_slew_step(100, 500, -1), 100);
+	EXPECT_EQ(ntp_slew_step(100, -500, 0), 100);
+}
+
+TEST(NTPSlewStep, LargeSignedValuesNoOverflow)
+{
+	/* applied near INT64 limits, target far away — must not overflow. */
+	int64_t big_pos = (int64_t)1 << 60;
+	int64_t big_neg = -big_pos;
+	EXPECT_EQ(ntp_slew_step(big_neg, big_pos, 1), big_neg + 1);
+	EXPECT_EQ(ntp_slew_step(big_pos, big_neg, 1), big_pos - 1);
+	/* And with a step that lands exactly on the target should snap. */
+	EXPECT_EQ(ntp_slew_step(big_pos - 5, big_pos, 5), big_pos);
+}
+
+TEST(NTPSlewStep, IdentityWhenAppliedEqualsTarget)
+{
+	/* Repeated calls converge in one step and stay put. */
+	int64_t applied = 0;
+	for (int i = 0; i < 5; i++) {
+		applied = ntp_slew_step(applied, 3, 5);
+	}
+	EXPECT_EQ(applied, 3);
+}

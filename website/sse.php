@@ -57,7 +57,9 @@ while (true) {
         $stmt = $db->prepare(
             "SELECT s.id, s.user_name, s.camera_id, s.status, s.started_at, s.stopped_at,
                     s.last_heartbeat, s.offset_ms, s.sync_method,
-                    s.pending_resync, s.last_recording_active
+                    s.pending_resync, s.last_recording_active,
+                    s.plugin_version, s.offset_age_sec,
+                    s.sync_lost_in_session
              FROM sessions s
              INNER JOIN (
                  SELECT user_name, MAX(id) as max_id

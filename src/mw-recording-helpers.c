@@ -30,39 +30,81 @@ int mw_build_heartbeat_body(char *buf, size_t bufsz,
 			    bool have_offset,
 			    int64_t offset_ms,
 			    int sync_method,
-			    bool synced)
+			    bool synced,
+			    int64_t raw_offset_ms,
+			    int offset_age_sec,
+			    const char *plugin_version,
+			    bool sync_lost_in_session)
 {
 	if (!buf || bufsz == 0)
 		return -1;
 	if (!name)
 		name = "";
 
-	int n;
-	if (have_offset) {
-		n = snprintf(buf, bufsz,
-			     "{\"name\":\"%s\","
-			     "\"recording_active\":%s,"
-			     "\"offset_ms\":%lld,"
-			     "\"sync_method\":%d,"
-			     "\"synced\":%s}",
-			     name,
-			     recording_active ? "true" : "false",
-			     (long long)offset_ms,
-			     sync_method,
-			     synced ? "true" : "false");
-	} else {
-		n = snprintf(buf, bufsz,
-			     "{\"name\":\"%s\","
-			     "\"recording_active\":%s}",
-			     name,
-			     recording_active ? "true" : "false");
-	}
+	bool have_version = (plugin_version != NULL && plugin_version[0] != '\0');
+	const char *sync_lost_str = sync_lost_in_session ? "true" : "false";
 
+	/* Build the JSON in two appended halves: required fields first, then
+	 * optional fields conditionally. Keeps the four-branch matrix from
+	 * earlier collapsed into one path. */
+	int n = snprintf(buf, bufsz,
+			 "{\"name\":\"%s\",\"recording_active\":%s",
+			 name,
+			 recording_active ? "true" : "false");
 	if (n < 0)
 		return -1;
-	/* snprintf returns the length it WOULD have written — truncation if >= bufsz */
 	if ((size_t)n >= bufsz)
 		return -1;
+
+	if (have_offset) {
+		int m = snprintf(buf + n, bufsz - (size_t)n,
+				 ",\"offset_ms\":%lld,\"sync_method\":%d,"
+				 "\"synced\":%s,\"raw_offset_ms\":%lld,"
+				 "\"offset_age_sec\":%d",
+				 (long long)offset_ms,
+				 sync_method,
+				 synced ? "true" : "false",
+				 (long long)raw_offset_ms,
+				 offset_age_sec);
+		if (m < 0)
+			return -1;
+		n += m;
+		if ((size_t)n >= bufsz)
+			return -1;
+	}
+
+	if (have_version) {
+		int m = snprintf(buf + n, bufsz - (size_t)n,
+				 ",\"plugin_version\":\"%s\"",
+				 plugin_version);
+		if (m < 0)
+			return -1;
+		n += m;
+		if ((size_t)n >= bufsz)
+			return -1;
+	}
+
+	/* sync_lost_in_session always present when the helper is called from
+	 * the plugin (we know the flag); test code that doesn't care can pass
+	 * false and the field is rendered as "false" — semantically identical
+	 * to "not lost". This deliberately deviates from the
+	 * omit-when-not-applicable pattern of the offset/version fields,
+	 * because the dashboard needs an explicit signal to clear a previously
+	 * shown red marker. */
+	int m = snprintf(buf + n, bufsz - (size_t)n,
+			 ",\"sync_lost_in_session\":%s",
+			 sync_lost_str);
+	if (m < 0)
+		return -1;
+	n += m;
+	if ((size_t)n >= bufsz)
+		return -1;
+
+	if ((size_t)n + 1 >= bufsz) /* room for closing brace */
+		return -1;
+	buf[n++] = '}';
+	buf[n] = '\0';
+
 	return n;
 }
 

@@ -44,9 +44,24 @@ require_once __DIR__ . '/includes/config.php';
             <p style="color: #888; font-size: 0.9rem; margin-top: 5px;">
                 MW Aufnahme-System &ndash; Informationen zum Datenschutz gemäß DSGVO
             </p>
+            <p style="color: #888; font-size: 0.85rem; margin-top: 3px;">
+                Stand: 23.05.2026 (Version 2)
+            </p>
         </header>
 
         <div class="privacy">
+
+            <div style="background: #4a3a00; border-left: 4px solid #ffd54f; padding: 12px 16px; margin: 16px 0; border-radius: 4px;">
+                <p style="margin: 0; color: #ffd54f;">
+                    <strong>Aktualisierung 23.05.2026:</strong>
+                    Mit Plugin-Version&nbsp;0.6.0 werden zus&auml;tzliche
+                    technische Felder im Heartbeat &uuml;bermittelt
+                    (<em>Plugin-Version</em>, <em>Sync-Status</em>,
+                    <em>Sync-Verlust-Marker</em> &ndash; siehe Abschnitt&nbsp;3).
+                    Beim n&auml;chsten Plugin-Start wird daher
+                    erneut um deine Einwilligung gebeten.
+                </p>
+            </div>
 
             <!-- ============================================================ -->
             <h2>1. Verantwortlicher</h2>
@@ -127,7 +142,7 @@ require_once __DIR__ . '/includes/config.php';
                     </tr>
                     <tr>
                         <td><strong>Kamera-ID</strong></td>
-                        <td>Die dir zugewiesene Kamerakennung (A&ndash;H).</td>
+                        <td>Die dir zugewiesene Kamerakennung (A&ndash;P).</td>
                         <td>&bdquo;B&ldquo;</td>
                     </tr>
                     <tr>
@@ -140,6 +155,33 @@ require_once __DIR__ . '/includes/config.php';
                         <td>Zeitpunkt von Aufnahmestart, -ende und letztem
                             Heartbeat-Signal.</td>
                         <td>&bdquo;2026-03-27 14:30:00&ldquo;</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Sync-Status</strong></td>
+                        <td>Drift in Millisekunden zwischen deiner PC-Uhr und
+                            dem NTP-Server, die verwendete Sync-Methode
+                            (NTP / HTTP / lokale Uhr) und das Alter der letzten
+                            Synchronisation. Erlaubt der Post-Production zu
+                            erkennen, welche Aufnahmen vertrauensw&uuml;rdig sind.</td>
+                        <td>&bdquo;+12&nbsp;ms / NTP / vor 4&nbsp;s&ldquo;</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Sync-Verlust-Marker</strong></td>
+                        <td>Ein Boolean-Flag, das gesetzt wird, falls w&auml;hrend
+                            einer aktiven Aufnahme die Zeitsynchronisation l&auml;nger
+                            als 30&nbsp;Sekunden verloren ging. Wird f&uuml;r die
+                            Post-Production zur Identifikation von potentiell
+                            unsynchronen Aufnahmen ben&ouml;tigt.</td>
+                        <td>&bdquo;true / false&ldquo;</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Plugin-Version</strong></td>
+                        <td>Die installierte Version dieses OBS-Plugins. Dient
+                            ausschlie&szlig;lich Support-Zwecken (Erkennen
+                            veralteter Installationen mit bekannten Bugs).
+                            Keine OBS-Version, kein Betriebssystem, keine
+                            Hardware-Daten.</td>
+                        <td>&bdquo;0.6.0&ldquo;</td>
                     </tr>
                     <tr>
                         <td><strong>IP-Adresse</strong></td>
@@ -156,7 +198,7 @@ require_once __DIR__ . '/includes/config.php';
                 <li>Keine Audio- oder Videoinhalte der Aufnahme</li>
                 <li>Keine Bildschirminhalte oder Screenshots</li>
                 <li>Keine Standortdaten (GPS)</li>
-                <li>Keine Geräteinformationen (Hardware, Betriebssystem)</li>
+                <li>Keine Ger&auml;teinformationen (OBS-Version, Hardware, Betriebssystem-Version, User-Pfade)</li>
                 <li>Keine Cookies oder Tracking-Technologien</li>
                 <li>Keine Daten an Werbenetzwerke oder Analyse-Dienste</li>
             </ul>

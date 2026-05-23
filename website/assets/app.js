@@ -156,6 +156,57 @@
                     + (syncMethod ? ' <span class="sync-label">(' + syncMethodLabel(syncMethod) + ')</span>' : '')
                     : '';
 
+                /* Plugin-Version (TICKET-047) — immer sichtbar wenn vorhanden.
+                 * Veraltete Versionen werden orange markiert, fehlende grau. */
+                const pluginVersion = (s.plugin_version !== null && s.plugin_version !== undefined && s.plugin_version !== '')
+                    ? String(s.plugin_version) : null;
+                const latestVer = window.MW_LATEST_PLUGIN_VERSION || '';
+                let versionCls = 'version-unknown';
+                let versionTxt = 'v? (nicht gemeldet)';
+                if (pluginVersion !== null) {
+                    if (latestVer && pluginVersion !== latestVer) {
+                        versionCls = 'version-outdated';
+                        versionTxt = 'v' + escapeHtml(pluginVersion) + ' (Update verfuegbar)';
+                    } else {
+                        versionCls = 'version-current';
+                        versionTxt = 'v' + escapeHtml(pluginVersion);
+                    }
+                }
+                const versionLine = '<br><span class="' + versionCls + '">Plugin: ' + versionTxt + '</span>';
+
+                /* Letzte-Sync-Zeit (TICKET-051) — nur sichtbar bei Online,
+                 * mit Farbcode bei Staleness. -1 = nie gesynct (rot). */
+                const ageRaw = (s.offset_age_sec !== null && s.offset_age_sec !== undefined && s.offset_age_sec !== '')
+                    ? parseInt(s.offset_age_sec, 10) : null;
+                let lastSyncLine = '';
+                if (isOnline && ageRaw !== null) {
+                    let cls = 'sync-fresh';
+                    let txt;
+                    if (ageRaw < 0) {
+                        cls = 'sync-old';
+                        txt = 'nie gesynct';
+                    } else if (ageRaw < 180) {
+                        cls = 'sync-fresh';
+                        txt = 'vor ' + ageRaw + ' s';
+                    } else if (ageRaw < 480) {
+                        cls = 'sync-stale';
+                        txt = 'vor ' + Math.round(ageRaw / 60) + ' Min';
+                    } else {
+                        cls = 'sync-old';
+                        txt = 'vor ' + Math.round(ageRaw / 60) + ' Min';
+                    }
+                    lastSyncLine = '<br><span class="' + cls + '">Letzte Sync: ' + txt + '</span>';
+                }
+
+                /* Sync-loss-during-recording sticky Marker (TICKET-043) —
+                 * sichtbar fuer ALLE Status (auch offline) sobald gesetzt,
+                 * damit der Director nach dem Stop sieht, dass die Aufnahme
+                 * verdaechtig ist. */
+                const syncLost = parseInt(s.sync_lost_in_session || 0, 10) === 1;
+                const syncLostBanner = syncLost
+                    ? '<div class="sync-lost-banner">&#9888; Sync waehrend Aufnahme verloren &mdash; bitte in Post pruefen</div>'
+                    : '';
+
                 const stopBtn = isOnline
                     ? '<button class="force-stop-btn" title="Aufnahme erzwungen beenden" onclick="event.stopPropagation();forceStop(' + s.id + ',\'' + escapeHtml(s.user_name).replace(/'/g, "\\'") + '\')">&#9632; Beenden</button>'
                     : '';
@@ -187,10 +238,13 @@
                         + label + '</button>';
                 }
 
-                const cardClass = ('user-card ' + statusClass + (offsetCls ? ' ' + offsetCls : '')).trim();
+                const cardClass = ('user-card ' + statusClass
+                    + (offsetCls ? ' ' + offsetCls : '')
+                    + (syncLost ? ' sync-lost' : '')).trim();
 
                 html += '<div class="' + cardClass + '">'
                     + '<button class="delete-btn" title="User entfernen" onclick="event.stopPropagation();deleteSession(' + s.id + ',\'' + escapeHtml(s.user_name).replace(/'/g, "\\'") + '\')">&times;</button>'
+                    + syncLostBanner
                     + '<div class="name">'
                     + '<span class="status-dot"></span>'
                     + escapeHtml(s.user_name)
@@ -200,6 +254,8 @@
                     + ' &middot; ' + statusText
                     + '<br>' + timeLabel + ': ' + timeStr
                     + offsetLine
+                    + lastSyncLine
+                    + versionLine
                     + '</div>'
                     + resyncBtn
                     + stopBtn
