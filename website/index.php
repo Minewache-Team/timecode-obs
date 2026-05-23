@@ -26,7 +26,7 @@ require_dashboard_auth();
                 <a href="index.php" class="active">Dashboard</a>
                 <a href="scenes.php">Szenen / Statistik</a>
                 <a href="datenschutz.php">Datenschutz</a>
-                <a href="login.php?logout=1" style="color:#f44336;">Logout</a>
+                <a href="logout.php" style="color:#f44336;">Logout</a>
             </nav>
         </header>
 

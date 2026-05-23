@@ -99,7 +99,7 @@ function json_response(array $data, int $status = 200): void
 }
 
 /**
- * Prüft ob der Regisseur eingeloggt ist (Session-basiert).
+ * Prüft ob der Regisseur eingeloggt ist (Discord OAuth2, Session-basiert).
  * Leitet zur Login-Seite weiter wenn nicht authentifiziert.
  */
 function require_dashboard_auth(): void
