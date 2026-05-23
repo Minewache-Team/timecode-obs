@@ -43,6 +43,13 @@ $mw_latest_plugin_version = get_latest_plugin_version();
                 <span class="scene-toggle-text">Szene laeuft</span>
             </label>
             <span class="scene-status" id="scene-status"></span>
+            <span class="latest-version-pin" title="Aktuelle Plugin-Version pinnen (was als 'aktuell' im Dashboard markiert wird)">
+                Plugin-Version:
+                <input type="text" id="latest-version-input"
+                       value="<?= htmlspecialchars($mw_latest_plugin_version) ?>"
+                       maxlength="20" size="8" pattern="[\w.+\-]{1,20}">
+                <button id="latest-version-save" type="button">Setzen</button>
+            </span>
             <span class="timestamp" id="last-update">Verbinde...</span>
         </div>
 
@@ -92,6 +99,6 @@ $mw_latest_plugin_version = get_latest_plugin_version();
          * Implementation: website/includes/latest_version.php */
         window.MW_LATEST_PLUGIN_VERSION = <?= json_encode($mw_latest_plugin_version) ?>;
     </script>
-    <script src="assets/app.js?v=4"></script>
+    <script src="assets/app.js?v=5"></script>
 </body>
 </html>

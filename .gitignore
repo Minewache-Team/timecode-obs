@@ -42,6 +42,10 @@
 # auto-refresh; never check into the repo.
 /website/.latest_version_cache
 
+# TICKET-060: Director-set override file (written via dashboard UI).
+# Server-side runtime state; never check into the repo.
+/website/.latest_version_override
+
 # Exclude lock files
 *.lock.json
 

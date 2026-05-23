@@ -26,15 +26,54 @@ function _mw_latest_version_cache_path(): string
     return __DIR__ . '/../.latest_version_cache';
 }
 
-function _mw_latest_version_fetch_from_github(): ?string
+/* Override file written by the director via the dashboard UI
+ * (dashboard-api.php?action=set_latest_version). Higher priority than
+ * the GitHub fetch, lower than the config.php constant. Gives the
+ * director one-click control without touching PHP/FTP. */
+function _mw_latest_version_override_path(): string
 {
-    /* Wichtig: wir wollen explizit den neuesten Minewache-Branch-Release,
-     * nicht den ggf. parallelen master-Release. Alle Minewache-Releases
-     * tragen "Minewache Specific Version" im Titel — wir holen daher die
-     * Liste der letzten 20 Releases und nehmen den ersten passenden. Faellt
-     * der Filter ins Leere (z.B. weil GitHub-Titel sich aendert), greift
-     * die Stale-Cache-Fallback-Kette eine Ebene drueber. */
-    $url = 'https://api.github.com/repos/Minewache-Team/timecode-obs/releases?per_page=20';
+    return __DIR__ . '/../.latest_version_override';
+}
+
+function _mw_latest_version_read_override(): ?string
+{
+    $path = _mw_latest_version_override_path();
+    if (!file_exists($path)) {
+        return null;
+    }
+    $value = trim((string) @file_get_contents($path));
+    if ($value === '' || !preg_match('/^[\w.+-]{1,20}$/', $value)) {
+        return null;
+    }
+    return $value;
+}
+
+function _mw_latest_version_http_get(string $url): ?string
+{
+    /* cURL bevorzugt — universell verfuegbar und arbeitet auch wenn
+     * allow_url_fopen=off ist (haeufig auf Shared-Hosting). file_get_contents
+     * mit stream_context_create ist Fallback fuer den seltenen Fall dass
+     * cURL nicht installiert ist. */
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 5);
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 3);
+        curl_setopt($ch, CURLOPT_USERAGENT, 'mw-aufnahme-dashboard');
+        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Accept: application/vnd.github+json']);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+        $body = curl_exec($ch);
+        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if (is_string($body) && $code >= 200 && $code < 300) {
+            return $body;
+        }
+        /* cURL hat geantwortet aber nicht erfolgreich — fall through zu
+         * stream_context als Notnagel. */
+    }
+
     $ctx = stream_context_create([
         'http' => [
             'method' => 'GET',
@@ -47,11 +86,24 @@ function _mw_latest_version_fetch_from_github(): ?string
             'verify_peer_name' => true,
         ],
     ]);
-
-    /* @ unterdrueckt Warnung wenn z.B. allow_url_fopen=off oder Netz tot;
-     * wir fangen das ueber den false-Rueckgabewert ab. */
     $body = @file_get_contents($url, false, $ctx);
     if ($body === false) {
+        return null;
+    }
+    return $body;
+}
+
+function _mw_latest_version_fetch_from_github(): ?string
+{
+    /* Wichtig: wir wollen explizit den neuesten Minewache-Branch-Release,
+     * nicht den ggf. parallelen master-Release. Alle Minewache-Releases
+     * tragen "Minewache Specific Version" im Titel — wir holen daher die
+     * Liste der letzten 20 Releases und nehmen den ersten passenden. Faellt
+     * der Filter ins Leere (z.B. weil GitHub-Titel sich aendert), greift
+     * die Stale-Cache-Fallback-Kette eine Ebene drueber. */
+    $url = 'https://api.github.com/repos/Minewache-Team/timecode-obs/releases?per_page=20';
+    $body = _mw_latest_version_http_get($url);
+    if ($body === null) {
         return null;
     }
 
@@ -87,13 +139,18 @@ function _mw_latest_version_fetch_from_github(): ?string
 
 function get_latest_plugin_version(): string
 {
-    /* 1. Admin override wins — if the operator hardcoded a value in
-     * config.php, honour it absolutely. This gives a reliable escape
-     * hatch when the cache file isn't writeable / deletable, when the
-     * GitHub fetch is blocked, or when the operator just wants to pin
-     * a specific value (e.g. before testing a release in the field). */
+    /* 1. Admin override via config.php constant — for ops who want it in
+     *    version control or as a deploy-time pin. */
     if (defined('MW_FALLBACK_LATEST_VERSION')) {
         return MW_FALLBACK_LATEST_VERSION;
+    }
+
+    /* 2. Dashboard-set override file — director clicks Save on the input
+     *    field at the top of the dashboard, writes here, wins over
+     *    GitHub-fetch and cache. */
+    $override = _mw_latest_version_read_override();
+    if ($override !== null) {
+        return $override;
     }
 
     $cache_path = _mw_latest_version_cache_path();

@@ -26,6 +26,50 @@
     const toast = document.getElementById('toast');
     const sceneToggle = document.getElementById('scene-toggle');
     const sceneStatus = document.getElementById('scene-status');
+    const latestVersionInput = document.getElementById('latest-version-input');
+    const latestVersionSave = document.getElementById('latest-version-save');
+
+    /* ---- TICKET-060: Latest Plugin-Version pinnen ---- */
+    if (latestVersionSave && latestVersionInput) {
+        latestVersionSave.addEventListener('click', function () {
+            const val = (latestVersionInput.value || '').trim();
+            if (!/^[\w.+\-]{1,20}$/.test(val)) {
+                showToast('Ungueltige Version (nur [a-z0-9.+-], max 20 Zeichen)', true);
+                return;
+            }
+            latestVersionSave.disabled = true;
+            fetch('dashboard-api.php?action=set_latest_version', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ version: val }),
+            })
+                .then(function (r) { return r.json(); })
+                .then(function (d) {
+                    latestVersionSave.disabled = false;
+                    if (d && d.ok) {
+                        showToast('Plugin-Version gesetzt: v' + val);
+                        /* JS-Variable aktualisieren damit die naechste Card-
+                         * Render-Pass die neue Version benutzt — ohne
+                         * Page-Reload. */
+                        window.MW_LATEST_PLUGIN_VERSION = val;
+                    } else {
+                        showToast(d && d.error ? d.error : 'Fehler beim Speichern', true);
+                    }
+                })
+                .catch(function () {
+                    latestVersionSave.disabled = false;
+                    showToast('Netzwerkfehler', true);
+                });
+        });
+
+        /* Enter-Taste im Input loest Save aus */
+        latestVersionInput.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                latestVersionSave.click();
+            }
+        });
+    }
 
     /* ---- Scene Toggle ---- */
 

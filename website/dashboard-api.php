@@ -11,6 +11,7 @@
  */
 
 require_once __DIR__ . '/includes/db.php';
+require_once __DIR__ . '/includes/latest_version.php';
 
 /* Dispatch-Logik nur ausfuehren wenn nicht im Test-Modus (TICKET-038). */
 if (!defined('MW_TEST_MODE') || !MW_TEST_MODE) {
@@ -33,6 +34,9 @@ if (!defined('MW_TEST_MODE') || !MW_TEST_MODE) {
             break;
         case 'request_resync':
             handle_request_resync();
+            break;
+        case 'set_latest_version':
+            handle_set_latest_version();
             break;
         default:
             json_response(['error' => 'Unknown action'], 400);
@@ -164,6 +168,43 @@ function handle_request_resync(): void
         'ok'                    => true,
         'queued_during_recording' => (int) $row['last_recording_active'] === 1,
         'message'               => $message,
+    ]);
+}
+
+/* TICKET-060: Dashboard-UI zum Setzen der "Latest known Plugin-Version".
+ * Schreibt in website/.latest_version_override — wird von
+ * latest_version.php gelesen und hat Vorrang vor GitHub-Fetch und Cache.
+ * Auth: erbt require_dashboard_auth() vom dispatch oben. */
+function handle_set_latest_version(): void
+{
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        json_response(['error' => 'Method not allowed'], 405);
+    }
+
+    $input = json_decode(file_get_contents('php://input'), true);
+    $version = isset($input['version']) && is_string($input['version'])
+        ? trim($input['version']) : '';
+
+    if (!preg_match('/^[\w.+-]{1,20}$/', $version)) {
+        json_response(['error' => 'Invalid version format (must match ^[\\w.+-]{1,20}$)'], 400);
+    }
+
+    $path = _mw_latest_version_override_path();
+    if (@file_put_contents($path, $version) === false) {
+        json_response(['error' => 'Could not write override file at ' . basename($path)], 500);
+    }
+
+    /* Cache invalidieren falls vorhanden — der Override soll sofort
+     * sichtbar sein, nicht erst nach Cache-TTL. */
+    $cache = _mw_latest_version_cache_path();
+    if (file_exists($cache)) {
+        @unlink($cache);
+    }
+
+    json_response([
+        'ok'      => true,
+        'version' => $version,
+        'message' => 'Latest Plugin-Version gesetzt: ' . $version,
     ]);
 }
 

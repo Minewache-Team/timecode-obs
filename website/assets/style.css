@@ -70,6 +70,45 @@ nav a.active {
     margin-left: auto;
 }
 
+/* TICKET-060: Latest-Plugin-Version-Pin im Status-Bar */
+.latest-version-pin {
+    color: #888;
+    font-size: 0.85em;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+.latest-version-pin input[type="text"] {
+    background: #1a1a2e;
+    color: #4fc3f7;
+    border: 1px solid #444;
+    border-radius: 3px;
+    padding: 2px 6px;
+    font-family: monospace;
+    font-size: 0.9em;
+}
+.latest-version-pin input[type="text"]:focus {
+    border-color: #4fc3f7;
+    outline: none;
+}
+.latest-version-pin button {
+    background: #0f3460;
+    color: #4fc3f7;
+    border: 1px solid #4fc3f7;
+    border-radius: 3px;
+    padding: 2px 8px;
+    cursor: pointer;
+    font-size: 0.85em;
+}
+.latest-version-pin button:hover {
+    background: #4fc3f7;
+    color: #0f3460;
+}
+.latest-version-pin button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 /* Szene-laeuft Toggle */
 .scene-toggle-label {
     display: inline-flex;
