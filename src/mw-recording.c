@@ -58,6 +58,20 @@
 #define MW_CONFIG_CAMERA_ID "camera_id"
 #define MW_CONFIG_ENABLED "enabled"
 #define MW_CONFIG_CONSENT "consent_given"
+#define MW_CONFIG_CONSENT_VERSION "consent_version"
+
+/* TICKET-048: When the data transmitted in the heartbeat changes
+ * (additional fields disclosed in datenschutz.php), bump this number.
+ * Users with a stored consent_version < CURRENT_CONSENT_VERSION will be
+ * shown the consent dialog again on the next plugin start, with the new
+ * data disclosure. Accepting stores the new version; declining clears
+ * consent_given so MW heartbeats stop, but the LTC source itself keeps
+ * working locally.
+ *
+ *   v1 (0.3.x – 0.5.x): name, recording_active, offset_ms, sync_method,
+ *                       synced, raw_offset_ms, offset_age_sec
+ *   v2 (0.6.0):         + plugin_version, sync_lost_in_session */
+#define MW_CURRENT_CONSENT_VERSION 2
 
 /* ---- Global state ---- */
 
@@ -69,6 +83,7 @@ static struct {
 	int camera_id;
 	bool enabled;
 	bool consent_given;
+	int consent_version; /* TICKET-048: which consent text the user accepted */
 
 	bool recording_active;
 
@@ -103,6 +118,8 @@ static void load_config(void)
 	g_mw.camera_id = (int)config_get_int(config, MW_CONFIG_SECTION, MW_CONFIG_CAMERA_ID);
 	g_mw.enabled = config_get_bool(config, MW_CONFIG_SECTION, MW_CONFIG_ENABLED);
 	g_mw.consent_given = config_get_bool(config, MW_CONFIG_SECTION, MW_CONFIG_CONSENT);
+	g_mw.consent_version =
+		(int)config_get_int(config, MW_CONFIG_SECTION, MW_CONFIG_CONSENT_VERSION);
 
 	pthread_mutex_unlock(&g_mw.mutex);
 }
@@ -121,6 +138,8 @@ static void save_config(void)
 	config_set_int(config, MW_CONFIG_SECTION, MW_CONFIG_CAMERA_ID, g_mw.camera_id);
 	config_set_bool(config, MW_CONFIG_SECTION, MW_CONFIG_ENABLED, g_mw.enabled);
 	config_set_bool(config, MW_CONFIG_SECTION, MW_CONFIG_CONSENT, g_mw.consent_given);
+	config_set_int(config, MW_CONFIG_SECTION, MW_CONFIG_CONSENT_VERSION,
+		       g_mw.consent_version);
 
 	pthread_mutex_unlock(&g_mw.mutex);
 
@@ -561,16 +580,19 @@ static LRESULT CALLBACK consent_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LPA
 		SendMessageW(title, WM_SETFONT, (WPARAM)hTitleFont, TRUE);
 		y += lh + 18;
 
-		/* Info text: what data is transmitted (7 lines) */
-		int h1 = lh * 7 + 4;
+		/* Info text: what data is transmitted (10 lines) */
+		int h1 = lh * 10 + 4;
 		HWND info1 = CreateWindowW(L"STATIC",
 					   L"Durch die MW-Aufnahme werden folgende Daten\r\n"
 					   L"an den Server \u00FCbermittelt:\r\n"
 					   L"\r\n"
 					   L"  \u2022  Dein Anzeigename\r\n"
-					   L"  \u2022  Deine Kamera-ID (A\u2013H)\r\n"
+					   L"  \u2022  Deine Kamera-ID (A\u2013P)\r\n"
 					   L"  \u2022  Aufnahmestatus (online/offline)\r\n"
-					   L"  \u2022  Zeitstempel (Start, Stop, Heartbeat)",
+					   L"  \u2022  Zeitstempel (Start, Stop, Heartbeat)\r\n"
+					   L"  \u2022  Plugin-Version (Support-Erkennung veralteter Installationen)\r\n"
+					   L"  \u2022  Sync-Status (Drift in ms, Sync-Methode, Alter)\r\n"
+					   L"  \u2022  Sync-Verlust-Marker (f\u00FCr Post-Production)",
 					   WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, h1, hwnd, NULL, NULL, NULL);
 		SendMessageW(info1, WM_SETFONT, (WPARAM)hFont, TRUE);
 		y += h1 + 6;
@@ -987,10 +1009,15 @@ static void open_settings_dialog(void)
 
 static bool ensure_consent(void)
 {
-	if (g_mw.consent_given)
+	/* TICKET-048: re-consent if the data disclosure has changed since the
+	 * user last accepted. consent_version 0 means a legacy install that
+	 * accepted before this mechanism existed — must re-consent. The LTC
+	 * source itself works regardless; only the MW heartbeat is gated. */
+	if (g_mw.consent_given && g_mw.consent_version >= MW_CURRENT_CONSENT_VERSION)
 		return true;
 
 #ifdef _WIN32
+	bool was_already_consenting = g_mw.consent_given;
 	char server[512], name[100], key[256];
 
 	pthread_mutex_lock(&g_mw.mutex);
@@ -1001,17 +1028,28 @@ static bool ensure_consent(void)
 
 	if (show_consent_dialog(server)) {
 		g_mw.consent_given = true;
+		g_mw.consent_version = MW_CURRENT_CONSENT_VERSION;
 		save_config();
 
 		char body[512];
 		snprintf(body, sizeof(body), "{\"name\":\"%s\",\"consent\":true}", name);
 		mw_http_post(server, "?action=consent", key, body, NULL, 0);
 
-		obs_log(LOG_INFO, "MW recording: user '%s' gave consent", name);
+		obs_log(LOG_INFO, "MW recording: user '%s' gave consent (v%d)",
+			name, MW_CURRENT_CONSENT_VERSION);
 		return true;
 	}
 
-	obs_log(LOG_INFO, "MW recording: user declined consent");
+	/* Declined: clear consent so heartbeat stops. LTC source is unaffected. */
+	if (was_already_consenting) {
+		g_mw.consent_given = false;
+		save_config();
+		obs_log(LOG_WARNING,
+			"MW recording: re-consent declined, MW heartbeat disabled. "
+			"LTC source continues to work locally.");
+	} else {
+		obs_log(LOG_INFO, "MW recording: user declined consent");
+	}
 	return false;
 #else
 	obs_log(LOG_WARNING, "MW recording consent dialog not available on this platform");

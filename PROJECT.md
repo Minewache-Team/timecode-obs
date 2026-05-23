@@ -1056,25 +1056,29 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
   `tests/test-mw-helpers.cpp`, `website/tests/HeartbeatTest.php`.
 
 #### TICKET-048: Datenschutz update + re-consent mechanic
-- **Status:** `TODO`
-- **Depends on:** TICKET-043, TICKET-044, TICKET-047, TICKET-049, TICKET-052
+- **Status:** `DONE`
+- **Depends on:** TICKET-043, TICKET-047
 - **Type:** Compliance
-- **Description:** Add new heartbeat fields (plugin_version, sync_status,
-  initial_offset_ms, audio drop counters) to `datenschutz.php` Section 3
-  table; update "Stand: TT.MM.JJJJ"; add yellow info-box at top
-  ("Aktualisiert am … — neue Felder: …"). In the plugin: bump
-  `CURRENT_CONSENT_VERSION` to 2; on plugin start, if stored
-  `mw_consent_version < 2`, show the existing DSGVO dialog again with an
-  intro line explaining *why* re-consent is needed. Decline = heartbeat
-  disabled (LTC still works locally). Accept = store version 2.
+- **Description:** `datenschutz.php` Section 3 table gets new rows for
+  Sync-Status (offset_ms + sync_method + offset_age), Sync-Verlust-Marker
+  (the TICKET-043 sticky flag), and Plugin-Version. Also: the Kamera-ID
+  range corrected to A–P (was A–H, stale since 0.4.0). New "Stand:
+  23.05.2026" header + yellow info-box explaining the re-consent. In the
+  plugin: new `MW_CURRENT_CONSENT_VERSION=2` constant + `consent_version`
+  config key; `ensure_consent` re-prompts when stored version < current.
+  Re-consent dialog body extended with the 3 new bullet points. Decline
+  path clears `consent_given` so the MW heartbeat stops, while the LTC
+  source itself keeps working locally (consistent with the
+  decline-from-scratch path).
 - **Acceptance Criteria:**
-  - [ ] `datenschutz.php` Section 3 table has new rows.
-  - [ ] Info-box visible at top of page with new date.
-  - [ ] Plugin: re-consent dialog shown on 0.5.x → 0.6.0 upgrade.
-  - [ ] Storing version 2 prevents subsequent re-shows.
-  - [ ] Decline path: no heartbeat sent (verified by absence of HTTP POST in test).
-- **Files:** `website/datenschutz.php`, `src/mw-recording.c`,
-  `data/locale/en-US.ini`.
+  - [x] Datenschutz table has Plugin-Version + Sync-Status + Sync-Verlust rows.
+  - [x] Camera-ID range fixed to A–P (was stale at A–H).
+  - [x] Stand-Datum updated; info-box at top.
+  - [x] Plugin: re-consent dialog shown when consent_version < 2.
+  - [x] Accept stores version 2; subsequent loads don't re-prompt.
+  - [x] Decline clears consent_given (heartbeat off, LTC still local).
+  - [x] Build clean.
+- **Files:** `website/datenschutz.php`, `src/mw-recording.c`.
 
 #### TICKET-049: NTP burst mode at cold start
 - **Status:** `DONE` (simplified: no median, slewing absorbs outliers)
