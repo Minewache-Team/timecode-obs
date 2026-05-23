@@ -87,9 +87,18 @@ function _mw_latest_version_fetch_from_github(): ?string
 
 function get_latest_plugin_version(): string
 {
+    /* 1. Admin override wins — if the operator hardcoded a value in
+     * config.php, honour it absolutely. This gives a reliable escape
+     * hatch when the cache file isn't writeable / deletable, when the
+     * GitHub fetch is blocked, or when the operator just wants to pin
+     * a specific value (e.g. before testing a release in the field). */
+    if (defined('MW_FALLBACK_LATEST_VERSION')) {
+        return MW_FALLBACK_LATEST_VERSION;
+    }
+
     $cache_path = _mw_latest_version_cache_path();
 
-    /* 1. Fresh cache hit */
+    /* 2. Fresh cache hit (< 1 h) */
     if (file_exists($cache_path)) {
         $age = time() - filemtime($cache_path);
         if ($age < MW_LATEST_VERSION_CACHE_TTL) {
@@ -100,14 +109,14 @@ function get_latest_plugin_version(): string
         }
     }
 
-    /* 2. Try GitHub */
+    /* 3. Try GitHub */
     $fetched = _mw_latest_version_fetch_from_github();
     if ($fetched !== null) {
         @file_put_contents($cache_path, $fetched);
         return $fetched;
     }
 
-    /* 3. Stale cache rather than nothing */
+    /* 4. Stale cache rather than nothing */
     if (file_exists($cache_path)) {
         $stale = trim((string) @file_get_contents($cache_path));
         if ($stale !== '') {
@@ -116,11 +125,6 @@ function get_latest_plugin_version(): string
             @touch($cache_path);
             return $stale;
         }
-    }
-
-    /* 4. Config override */
-    if (defined('MW_FALLBACK_LATEST_VERSION')) {
-        return MW_FALLBACK_LATEST_VERSION;
     }
 
     /* 5. Hardcoded last-resort */
