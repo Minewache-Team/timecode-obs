@@ -22,6 +22,32 @@ $mw_latest_plugin_version = get_latest_plugin_version();
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MW Aufnahme - Dashboard</title>
     <link rel="stylesheet" href="assets/style.css">
+    <style>
+        .field-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .field-row input {
+            flex: 1;
+        }
+        .btn-plus {
+            flex-shrink: 0;
+            padding: 6px 12px;
+            background: #1a3a5c;
+            color: #4fc3f7;
+            border: 1px solid #4fc3f7;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: bold;
+            line-height: 1;
+        }
+        .btn-plus:hover {
+            background: #4fc3f7;
+            color: #1a1a2e;
+        }
+    </style>
 </head>
 <body>
     <div class="container">
@@ -66,16 +92,25 @@ $mw_latest_plugin_version = get_latest_plugin_version();
                 <input type="hidden" name="session_ids" id="session-ids" value="">
 
                 <label for="season">Staffel</label>
-                <input type="number" name="season" id="season" min="1" value="1" required>
+                <div class="field-row">
+                    <input type="number" name="season" id="season" min="1" value="1" required>
+                    <button type="button" class="btn-plus" data-target="season">+1</button>
+                </div>
 
                 <label for="episode">Folge</label>
-                <input type="number" name="episode" id="episode" min="1" value="1" required>
+                <div class="field-row">
+                    <input type="number" name="episode" id="episode" min="1" value="1" required>
+                    <button type="button" class="btn-plus" data-target="episode">+1</button>
+                </div>
 
                 <label for="scene_name">Szenenname (optional)</label>
                 <input type="text" name="scene_name" id="scene_name" placeholder="z.B. Intro, Interview, Outro...">
 
                 <label for="take">Versuch</label>
-                <input type="number" name="take" id="take" min="1" value="1" required>
+                <div class="field-row">
+                    <input type="number" name="take" id="take" min="1" value="1" required>
+                    <button type="button" class="btn-plus" data-target="take">+1</button>
+                </div>
 
                 <label for="notes">Notizen (optional)</label>
                 <textarea name="notes" id="notes" placeholder="Zusätzliche Infos..."></textarea>
@@ -99,6 +134,6 @@ $mw_latest_plugin_version = get_latest_plugin_version();
          * Implementation: website/includes/latest_version.php */
         window.MW_LATEST_PLUGIN_VERSION = <?= json_encode($mw_latest_plugin_version) ?>;
     </script>
-    <script src="assets/app.js?v=5"></script>
+    <script src="assets/app.js?v=6"></script>
 </body>
 </html>

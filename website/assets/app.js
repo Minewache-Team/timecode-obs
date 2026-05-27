@@ -354,6 +354,15 @@
             idsInput.value = sessionIds.join(',');
         }
 
+        /* TICKET-061: Letzte Werte wiederherstellen */
+        var lastSeason = localStorage.getItem('mw_last_season');
+        var lastEpisode = localStorage.getItem('mw_last_episode');
+        var lastSceneName = localStorage.getItem('mw_last_scene_name');
+        if (lastSeason) document.getElementById('season').value = lastSeason;
+        if (lastEpisode) document.getElementById('episode').value = lastEpisode;
+        if (lastSceneName !== null) document.getElementById('scene_name').value = lastSceneName;
+        /* take wird immer auf 1 zurueckgesetzt */
+
         modalOverlay.classList.add('active');
     }
 
@@ -376,6 +385,10 @@
                 .then(function (res) { return res.json(); })
                 .then(function (data) {
                     if (data.ok) {
+                        /* TICKET-061: Werte vor dem Reset speichern */
+                        localStorage.setItem('mw_last_season', formData.get('season') || '1');
+                        localStorage.setItem('mw_last_episode', formData.get('episode') || '1');
+                        localStorage.setItem('mw_last_scene_name', formData.get('scene_name') || '');
                         showToast('Szene gespeichert!');
                         hideSceneModal();
                         sceneForm.reset();
@@ -400,6 +413,14 @@
             sceneSessionIds = new Set();
         });
     }
+
+    /* TICKET-061: +1 Buttons fuer Staffel, Folge, Versuch */
+    document.querySelectorAll('.btn-plus').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var input = document.getElementById(btn.dataset.target);
+            if (input) input.value = (parseInt(input.value, 10) || 0) + 1;
+        });
+    });
 
     /* ---- Toast ---- */
 

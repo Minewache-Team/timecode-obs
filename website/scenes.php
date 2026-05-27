@@ -121,6 +121,24 @@ try {
             font-style: italic;
             font-size: 0.85rem;
         }
+        .cam-badges {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+        }
+        .cam-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: #4fc3f7;
+            color: #1a1a2e;
+            font-weight: bold;
+            font-size: 0.75rem;
+            cursor: default;
+        }
         .expand-icon {
             display: inline-block;
             transition: transform 0.2s;
@@ -191,7 +209,17 @@ try {
                             <td>E<?= str_pad($scene['episode'], 2, '0', STR_PAD_LEFT) ?></td>
                             <td><?= $scene['scene_name'] !== '' ? htmlspecialchars($scene['scene_name']) : '<span style="color:#666;">-</span>' ?></td>
                             <td><?= (int)($scene['take'] ?? 1) ?></td>
-                            <td><?= $cam_count > 0 ? $cam_count . ' Kamera' . ($cam_count > 1 ? 's' : '') : '-' ?></td>
+                            <td>
+                                <?php if ($cam_count > 0): ?>
+                                    <div class="cam-badges">
+                                        <?php foreach ($participants as $p): ?>
+                                            <span class="cam-badge" title="<?= htmlspecialchars($p['user_name']) ?>"><?= htmlspecialchars($p['camera_id']) ?></span>
+                                        <?php endforeach; ?>
+                                    </div>
+                                <?php else: ?>
+                                    <span style="color:#666;">-</span>
+                                <?php endif; ?>
+                            </td>
                             <td><?= $scene['started_at'] ? date('H:i:s', strtotime($scene['started_at'])) : '-' ?></td>
                             <td><?= $scene['stopped_at'] ? date('H:i:s', strtotime($scene['stopped_at'])) : '-' ?></td>
                             <td><?= date('d.m.Y H:i', strtotime($scene['created_at'])) ?></td>

@@ -1261,6 +1261,36 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 - **Files:** `src/mw-recording.c`, `website/includes/db.php`,
   `buildspec.json`, `PROJECT.md`.
 
+#### TICKET-061: Scene form memory + +1 buttons
+- **Status:** `DONE`
+- **Type:** UX improvement (website-only)
+- **Description:** The scene modal resets to defaults each time it opens.
+  Directors had to retype Staffel/Folge/Szenenname on every take.
+  - `localStorage` persists the last saved season, episode, and scene_name.
+  - Modal pre-fills those values on next open; take always resets to 1.
+  - +1 buttons added next to season, episode, and take fields for quick
+    increment without touching the keyboard.
+- **Acceptance Criteria:**
+  - [x] After saving a scene, reopening the modal shows the last season/episode/scene_name.
+  - [x] Take field resets to 1 on each open.
+  - [x] +1 buttons increment the respective field value.
+- **Files:** `website/index.php`, `website/assets/app.js`.
+
+#### TICKET-062: Camera badge visibility in scenes.php
+- **Status:** `DONE`
+- **Type:** UX improvement (website-only)
+- **Description:** The "Kameras" column in the scenes table showed only a
+  count (e.g. "2 Kameras"). Directors had to expand each row to see who
+  was involved. Now shows small colored circular badges with each
+  participant's camera letter directly in the table row; tooltip shows
+  the full name on hover. The expandable detail row with full timestamps
+  is unchanged.
+- **Acceptance Criteria:**
+  - [x] Camera letter badges visible in main table row without expanding.
+  - [x] Hovering a badge shows the participant's name.
+  - [x] Expanding the row still shows full detail with timestamps.
+- **Files:** `website/scenes.php`.
+
 ---
 
 ## Decision Log
@@ -1337,6 +1367,7 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 | Session | Date | Agent | Tickets Worked | Status at End | Notes |
 |---------|------|-------|----------------|---------------|-------|
+| 22 | 2026-05-27 | Claude Sonnet 4.6 | TICKET-061 (done), TICKET-062 (done) | Both DONE | Website-only UX polish. TICKET-061: scene modal now persists last-saved season/episode/scene_name in localStorage and pre-fills on reopen; take resets to 1 each time; +1 buttons added next to all three number fields for one-click increment. TICKET-062: "Kameras" column in scenes.php table now shows compact circular letter badges (22 px, tooltip = name) directly in the main row instead of a bare count — directors see who was in each scene without expanding. Expand-on-click detail row with full timestamps unchanged. No backend changes, no schema changes. |
 | 21 | 2026-05-23 | Claude Opus 4.7 (1M) | TICKET-057, TICKET-058, TICKET-059 | 0.6.2 shipped (server + plugin) | Cluster of follow-ups after 0.6.1. TICKET-057 (server-only): handle_start now copies plugin_version from the previous session row into the new one, so the dashboard doesn't show "Plugin V nicht gefunden" for ~30 s between recording start and first heartbeat. TICKET-058 (server-only): `latest_version.php` auto-fetches the latest release from the GitHub API (filtered to Minewache by matching "Minewache" in the release name), 1 h cache, multi-stage fallback. Replaces the previous hardcoded `window.MW_LATEST_PLUGIN_VERSION` so we never again forget to bump it on a release. Smoke-tested locally — returned "0.6.1". TICKET-059 (plugin): new `ltc_source_signal_recording_stopped()` API that sets `ntp_sync_recovered_edge=true` on every LTC source via `obs_enum_sources`, called from the `RECORDING_STOPPED` handler. Fixes the "50 s offset persists across takes" field bug — slewing alone (max 10 ms/frame idle) couldn't bridge a multi-second OS-clock skew in a normal between-takes window, and the existing edge trigger only fired on NTP degrade/recovery or director kick (neither happens for a steadily-wrong PC clock). Callback guards on `first_sync_done` so cold-start cases still use the `initial_sync` path. Build clean on Windows. |
 | 20 | 2026-05-23 | Claude Opus 4.7 (1M) | TICKET-055 (rolled back), TICKET-056 (done) | 0.6.1 hotfix shipped | Field-reproduced ~2 h after 0.6.0 tag: (a) TICKET-055 force-resume from inside `OBS_FRONTEND_EVENT_RECORDING_PAUSED` deadlocks the subsequent Stop ("Aufnahme wird beendet" hangs indefinitely) — re-entrancy into the OBS frontend API from an event callback is not safe. Reverted to warning-only modal (matches 0.5.x behaviour). (b) Killed OBS instances stayed "online" on the dashboard because `HEARTBEAT_TIMEOUT` constant was likely undefined or set too high in the production `config.php` (gitignored, can't see it). Added defensive `if (!defined('HEARTBEAT_TIMEOUT')) define(..., 60)` in `db.php` — 60 s = one full 30 s plugin heartbeat miss + 30 s grace. Files: `src/mw-recording.c`, `website/includes/db.php`. Build clean on Windows. |
 | 19 | 2026-05-23 | Claude Opus 4.7 (1M) | TICKET-043, TICKET-044, TICKET-045, TICKET-047, TICKET-048, TICKET-049, TICKET-050, TICKET-051, TICKET-055 (all done); TICKET-042, TICKET-046, TICKET-052 (deferred to 0.6.1) | Epic 18 shipped as 0.6.0 | Trust the Timecode release. Brutally honest sync-robustness audit of 0.5.1 found 8 real gaps; this release addresses 5 of them and defers 3 with documented reasoning. Highlights: (1) **Plugin-Version end-to-end** (TICKET-047) — user's primary ask: each user card now shows "Plugin: v0.6.0" with green/orange/grey state against window.MW_LATEST_PLUGIN_VERSION pinned in index.php. Migration + validation + PHPUnit tests round-trip. (2) **Last-sync-age** (TICKET-051) — `offset_age_sec` now persisted, rendered as "Letzte Sync: vor X" with green/orange/red staleness. (3) **Sync-loss-during-recording sticky flag** (TICKET-043) — plugin sets `sync_lost_in_session` true when `recording_active && consecutive_sync_failures>=3` is seen in the NTP thread; sticky for the lifetime; server uses GREATEST() for sticky DB persistence; dashboard renders red border + banner. (4) **NTP cold-start burst + jitter** (TICKET-049+050) — cycles 1-3 run 2s apart, 4-5 ten seconds apart, 6+ standard interval; first-query random jitter 0-10s prevents 15 simultaneous startups from spiking one server. Reduces cold-start risk window from one full interval (300s) to ~36s. (5) **ctest in CI** (TICKET-045) — 5 test binaries were compiled but never run on Windows/Ubuntu/macOS; now invoked on every push (continue-on-error for 0.6.0 so a test flake can't block release artifact). (6) **PC clock skew warning** (TICKET-044) — LOG_ERROR fires on first sync when initial offset > 2s with remediation hint. (7) **Datenschutz update + re-consent** (TICKET-048) — Section 3 table gets 3 new rows + corrected Kamera-ID range A–P; plugin has new MW_CURRENT_CONSENT_VERSION=2; users with consent_version<2 get re-prompted on next start. Decline path leaves LTC working locally, only stops the heartbeat. (8) **Hard-block recording pause** (TICKET-055) — field-report bug: pausing produces an LTC gap, breaking DaVinci sync. Was warn-only; now force-resumes via `obs_frontend_recording_pause(false)`. Tests: 5/5 ctest suites green locally on Windows; 6 new gtest cases (sync_lost_in_session + plugin_version field shapes); 8 new PHPUnit cases (validation, sticky persistence, COALESCE-preserves-existing). Deferrals: cold-start modal (TICKET-042 — burst mode shrinks the cold-start risk window, modal can wait), integration test harness (TICKET-046 — existing unit coverage + manual lab verification before tomorrow's shoot are sufficient), audio-drop detection (TICKET-052 — TICKET-055 handles the most common case). Commits are 1-per-ticket for easy revertability if any specific change misbehaves in the field. |
