@@ -53,22 +53,77 @@ TEST(TimecodeTest, MidnightRollover)
 TEST(TimecodeTest, DropFrame2997)
 {
 	smpte_timecode_t tc;
-	/* At minute boundary (not divisible by 10), frames 0 and 1 should be skipped */
-	/* 01:01:00.000 => should have frame=2 (not 0) because of drop-frame */
+	/* Wall clock 01:01:00.000. Standard SMPTE drop-frame: just before
+	 * each minute mark the label lags the wall clock by ~2 frames (the
+	 * skip of :00/:01 at the minute start re-aligns it). 3660 s elapsed
+	 * = 109690 frames at 29.97 fps; renumbered into label space that is
+	 * 01:00:59;28 — labels 01:01:00;00/;01 do not exist. */
 	int64_t unix_sec = 1 * 3600 + 1 * 60 + 0;
 	ASSERT_TRUE(timecode_from_unix(unix_sec, 0, TC_FPS_29_97_DF, &tc));
 	EXPECT_TRUE(tc.drop_frame);
-	EXPECT_EQ(tc.frames, 2); /* frames 0,1 dropped at non-10th minutes */
+	EXPECT_EQ(tc.hours, 1);
+	EXPECT_EQ(tc.minutes, 0);
+	EXPECT_EQ(tc.seconds, 59);
+	EXPECT_EQ(tc.frames, 28);
 }
 
 TEST(TimecodeTest, DropFrameNoSkipAt10thMinute)
 {
 	smpte_timecode_t tc;
-	/* At 10th minute boundary, no skip */
+	/* At 10-minute marks drop-frame and wall clock coincide (no labels
+	 * dropped in minutes divisible by 10): 01:10:00.000 → 01:10:00;00. */
 	int64_t unix_sec = 1 * 3600 + 10 * 60 + 0;
 	ASSERT_TRUE(timecode_from_unix(unix_sec, 0, TC_FPS_29_97_DF, &tc));
 	EXPECT_TRUE(tc.drop_frame);
-	EXPECT_EQ(tc.frames, 0); /* no skip at 10th minute */
+	EXPECT_EQ(tc.hours, 1);
+	EXPECT_EQ(tc.minutes, 10);
+	EXPECT_EQ(tc.seconds, 0);
+	EXPECT_EQ(tc.frames, 0);
+}
+
+TEST(TimecodeTest, DropFrameLabelsAreStrictlyMonotonic)
+{
+	/* Sample the middle of consecutive 29.97 fps frame periods across the
+	 * 01:00:59 → 01:01:00 minute boundary (where labels are dropped) and
+	 * require the label index to advance by exactly 1 per frame period.
+	 * The old wall-clock-at-nominal-30 mapping emitted the label
+	 * 01:01:00;02 three times in a row here — LTC decoders and NLEs see
+	 * a stalled timecode and lose lock. */
+	const int64_t k_start = 109640; /* ~3658.3 s after midnight */
+	const int64_t k_end = 109740;   /* ~3661.7 s — spans the boundary */
+	int64_t prev_idx = -1;
+
+	for (int64_t k = k_start; k <= k_end; k++) {
+		/* Start of frame k in µs is k*1001000000/30000; add half a
+		 * frame period to sample mid-frame, away from boundaries. */
+		int64_t t_us = k * 1001000000LL / 30000 + 16683;
+		smpte_timecode_t tc;
+		ASSERT_TRUE(timecode_from_unix(t_us / 1000000, t_us % 1000000,
+					       TC_FPS_29_97_DF, &tc));
+		int64_t idx = ((tc.hours * 60 + tc.minutes) * 60 + tc.seconds) *
+				      30 + tc.frames;
+		if (prev_idx >= 0) {
+			/* In nominal index space a drop boundary advances by
+			 * exactly 3 (labels ;00/;01 don't exist); everywhere
+			 * else by exactly 1. Step 0 (the old duplicate-label
+			 * bug) or step 2 (half-applied drop) must fail. */
+			bool at_drop = (tc.seconds == 0 &&
+					(tc.minutes % 10) != 0 &&
+					tc.frames == 2 &&
+					prev_idx % 30 == 29);
+			int64_t expected_step = at_drop ? 3 : 1;
+			EXPECT_EQ(idx, prev_idx + expected_step)
+				<< "label discontinuity at frame period " << k
+				<< " (" << (int)tc.hours << ":" << (int)tc.minutes
+				<< ":" << (int)tc.seconds << ";" << (int)tc.frames
+				<< ")";
+		}
+		/* Dropped labels must never appear: frames 0/1 are illegal at
+		 * non-10th minute starts. */
+		if (tc.seconds == 0 && (tc.minutes % 10) != 0)
+			EXPECT_GE(tc.frames, 2);
+		prev_idx = idx;
+	}
 }
 
 TEST(TimecodeTest, AllFramerates)

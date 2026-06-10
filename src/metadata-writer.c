@@ -21,6 +21,8 @@
 #ifdef ENABLE_FRONTEND_API
 
 #include "metadata-writer.h"
+#include "ltc-source.h"
+#include "mw-recording-helpers.h"
 
 #include <obs-module.h>
 #include <obs-frontend-api.h>
@@ -46,69 +48,42 @@ struct metadata_writer {
 	bool recording_active;
 };
 
-/* Escape backslashes in Windows paths for JSON output */
-static void write_escaped_path(FILE *f, const char *path)
+/* Write a string as JSON-safe content: backslashes in Windows paths are
+ * normalized to '/', then the result is JSON-escaped (quotes, control
+ * chars). Without the escaping, a quote in a path or NTP server name
+ * produced an invalid sidecar that downstream tooling can't parse. */
+static void write_json_string(FILE *f, const char *s)
 {
-	for (const char *p = path; *p; p++) {
-		if (*p == '\\')
-			fputc('/', f);
-		else
-			fputc(*p, f);
-	}
+	char norm[1024];
+	size_t i = 0;
+	for (const char *p = s; *p && i + 1 < sizeof(norm); p++)
+		norm[i++] = (*p == '\\') ? '/' : *p;
+	norm[i] = '\0';
+
+	char esc[2048];
+	if (mw_json_escape_string(esc, sizeof(esc), norm) < 0)
+		esc[0] = '\0'; /* never emit a partially escaped value */
+	fputs(esc, f);
 }
 
-static void write_sidecar_start(const char *recording_path,
-				struct metadata_writer *mw)
+/* Replace the recording's file extension with .ltc.json — looking for the
+ * dot only in the basename. A dot in a directory name ("D:\OBS v1.2\rec")
+ * must not be mistaken for the extension, or the sidecar lands as
+ * "D:\OBS v1.ltc.json" next to the wrong folder. */
+static void make_sidecar_path(char *path, size_t pathsz)
 {
-	/* Compute sidecar path: replace extension with .ltc.json */
-	char sidecar_path[1024];
-	snprintf(sidecar_path, sizeof(sidecar_path), "%s", recording_path);
-	char *dot = strrchr(sidecar_path, '.');
+	char *base = strrchr(path, '/');
+	char *base_w = strrchr(path, '\\');
+	if (base_w && (!base || base_w > base))
+		base = base_w;
+	base = base ? base + 1 : path;
+
+	char *dot = strrchr(base, '.');
 	if (dot)
-		snprintf(dot,
-			 sizeof(sidecar_path) - (size_t)(dot - sidecar_path),
-			 ".ltc.json");
+		snprintf(dot, pathsz - (size_t)(dot - path), ".ltc.json");
 	else
-		snprintf(sidecar_path + strlen(sidecar_path),
-			 sizeof(sidecar_path) - strlen(sidecar_path),
+		snprintf(path + strlen(path), pathsz - strlen(path),
 			 ".ltc.json");
-
-	FILE *f = fopen(sidecar_path, "w");
-	if (!f) {
-		obs_log(LOG_WARNING, "Failed to create sidecar: %s",
-			sidecar_path);
-		return;
-	}
-
-	/* Write valid JSON with start data (end data added on stop) */
-	char start_iso[64];
-	struct tm *utc = gmtime(&mw->start_time);
-	if (utc)
-		strftime(start_iso, sizeof(start_iso), "%Y-%m-%dT%H:%M:%SZ",
-			 utc);
-	else
-		snprintf(start_iso, sizeof(start_iso), "unknown");
-
-	fprintf(f, "{\n");
-	fprintf(f, "  \"plugin\": \"obs-ltc-timecode\",\n");
-	fprintf(f, "  \"version\": \"%s\",\n", PLUGIN_VERSION);
-	fprintf(f, "  \"camera_id\": \"%c\",\n", 'A' + mw->camera_id);
-	fprintf(f, "  \"framerate\": \"%s\",\n", mw->framerate_str);
-	fprintf(f, "  \"ntp_server\": \"%s\",\n", mw->ntp_server);
-	fprintf(f, "  \"ntp_synced\": %s,\n",
-		mw->ntp_synced ? "true" : "false");
-	fprintf(f, "  \"ntp_offset_ms\": %lld,\n",
-		(long long)mw->ntp_offset_ms);
-	fprintf(f, "  \"sync_method\": \"%s\",\n", mw->sync_method);
-	fprintf(f, "  \"recording_start\": \"%s\",\n", start_iso);
-	fprintf(f, "  \"start_timecode\": \"%s\",\n", mw->start_timecode);
-	fprintf(f, "  \"recording_file\": \"");
-	write_escaped_path(f, recording_path);
-	fprintf(f, "\"\n");
-	fprintf(f, "}\n");
-
-	fclose(f);
-	obs_log(LOG_INFO, "Metadata sidecar started: %s", sidecar_path);
 }
 
 static void write_sidecar_end(const char *recording_path,
@@ -117,13 +92,25 @@ static void write_sidecar_end(const char *recording_path,
 	/* Compute sidecar path */
 	char sidecar_path[1024];
 	snprintf(sidecar_path, sizeof(sidecar_path), "%s", recording_path);
-	char *dot = strrchr(sidecar_path, '.');
-	if (dot)
-		snprintf(dot,
-			 sizeof(sidecar_path) - (size_t)(dot - sidecar_path),
-			 ".ltc.json");
-	else
-		return;
+	make_sidecar_path(sidecar_path, sizeof(sidecar_path));
+
+	/* Refresh the sync fields from the live LTC source. metadata_writer_
+	 * set_info() only runs when the user changes source settings, so
+	 * without this refresh the sidecar would report the create-time
+	 * values (ntp_synced=false, ntp_offset_ms=0) for every recording —
+	 * defeating the purpose of the audit trail. camera_id / framerate /
+	 * ntp_server stay from set_info (they don't change during a take). */
+	ltc_diag_t diag;
+	bool have_diag = ltc_source_get_diag(&diag);
+	if (have_diag) {
+		mw->ntp_synced = diag.synced;
+		mw->ntp_offset_ms = diag.raw_offset_ms;
+		const char *m = (diag.sync_method == SYNC_METHOD_NTP) ? "NTP"
+			      : (diag.sync_method == SYNC_METHOD_HTTP)
+					? "HTTP"
+					: "local";
+		snprintf(mw->sync_method, sizeof(mw->sync_method), "%s", m);
+	}
 
 	time_t now = time(NULL);
 	double duration = difftime(now, mw->start_time);
@@ -151,24 +138,49 @@ static void write_sidecar_end(const char *recording_path,
 	else
 		snprintf(start_iso, sizeof(start_iso), "unknown");
 
+	int cam = mw->camera_id;
+	if (cam < 0 || cam > 15)
+		cam = 0;
+
 	fprintf(f, "{\n");
 	fprintf(f, "  \"plugin\": \"obs-ltc-timecode\",\n");
 	fprintf(f, "  \"version\": \"%s\",\n", PLUGIN_VERSION);
-	fprintf(f, "  \"camera_id\": \"%c\",\n", 'A' + mw->camera_id);
+	fprintf(f, "  \"camera_id\": \"%c\",\n", 'A' + cam);
 	fprintf(f, "  \"framerate\": \"%s\",\n", mw->framerate_str);
-	fprintf(f, "  \"ntp_server\": \"%s\",\n", mw->ntp_server);
+	fprintf(f, "  \"ntp_server\": \"");
+	write_json_string(f, mw->ntp_server);
+	fprintf(f, "\",\n");
 	fprintf(f, "  \"ntp_synced\": %s,\n",
 		mw->ntp_synced ? "true" : "false");
 	fprintf(f, "  \"ntp_offset_ms\": %lld,\n",
 		(long long)mw->ntp_offset_ms);
 	fprintf(f, "  \"sync_method\": \"%s\",\n", mw->sync_method);
+	if (have_diag) {
+		/* TICKET-075: post-mortem diagnostics. The cutter/developer
+		 * reading this weeks later sees the line quality, how far the
+		 * recorded TC was from target at stop, whether the PC clock
+		 * was broken at boot, and whether sync was lost mid-take —
+		 * without anyone having to remember the shoot evening. */
+		fprintf(f, "  \"ntp_rtt_ms\": %lld,\n",
+			(long long)diag.rtt_ms);
+		fprintf(f, "  \"applied_offset_ms\": %lld,\n",
+			(long long)diag.applied_offset_ms);
+		fprintf(f, "  \"applied_delta_ms\": %lld,\n",
+			(long long)diag.applied_delta_ms);
+		fprintf(f, "  \"offset_age_sec\": %d,\n",
+			diag.offset_age_sec);
+		fprintf(f, "  \"initial_clock_skew_ms\": %lld,\n",
+			(long long)diag.initial_skew_ms);
+		fprintf(f, "  \"sync_lost_in_session\": %s,\n",
+			diag.sync_lost_in_session ? "true" : "false");
+	}
 	fprintf(f, "  \"recording_start\": \"%s\",\n", start_iso);
 	fprintf(f, "  \"recording_stop\": \"%s\",\n", end_iso);
 	fprintf(f, "  \"duration_seconds\": %.0f,\n", duration);
 	fprintf(f, "  \"start_timecode\": \"%s\",\n", mw->start_timecode);
 	fprintf(f, "  \"end_timecode\": \"%s\",\n", mw->current_timecode);
 	fprintf(f, "  \"recording_file\": \"");
-	write_escaped_path(f, recording_path);
+	write_json_string(f, recording_path);
 	fprintf(f, "\"\n");
 	fprintf(f, "}\n");
 
@@ -188,16 +200,10 @@ static void on_recording_event(enum obs_frontend_event event, void *data)
 		snprintf(mw->start_timecode, sizeof(mw->start_timecode), "%s",
 			 mw->current_timecode);
 		mw->recording_active = true;
-
-		/* Try to get recording path and write start sidecar */
-		char *path =
-			obs_frontend_get_current_record_output_path();
-		if (path) {
-			/* We have the directory but not the full filename yet.
-			 * The full path is only available after stop.
-			 * Store for later use. */
-			bfree(path);
-		}
+		/* The final recording filename is only available after the
+		 * recording stops (obs_frontend_get_last_recording()), so the
+		 * complete sidecar — start AND end data — is written in one
+		 * shot on STOPPED below. */
 	} else if (event == OBS_FRONTEND_EVENT_RECORDING_STOPPED) {
 		mw->recording_active = false;
 

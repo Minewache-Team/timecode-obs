@@ -24,6 +24,7 @@ target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE libltc)
 if(ENABLE_FRONTEND_API)
   find_package(obs-frontend-api REQUIRED)
   target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::obs-frontend-api)
+  target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE ENABLE_FRONTEND_API)
 endif()
 
 # libcurl for HTTP time fallback
@@ -65,6 +66,10 @@ target_sources(
           src/http-time-client.h
           src/metadata-writer.c
           src/metadata-writer.h
+          src/mw-recording.c
+          src/mw-recording.h
+          src/mw-recording-helpers.c
+          src/mw-recording-helpers.h
 )
 
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -73,6 +78,16 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE
 if(APPLE)
   set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES
     INSTALL_RPATH "@loader_path/../Frameworks"
+    BUILD_WITH_INSTALL_RPATH TRUE
+  )
+endif()
+
+# Linux: libltc.so is dynamically linked and deployed next to the plugin .so
+# (see install.sh). $ORIGIN makes the loader look in the plugin's own
+# directory, so no system-wide install or LD_LIBRARY_PATH is required.
+if(UNIX AND NOT APPLE)
+  set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES
+    INSTALL_RPATH "$ORIGIN"
     BUILD_WITH_INSTALL_RPATH TRUE
   )
 endif()

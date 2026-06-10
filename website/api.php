@@ -1,0 +1,379 @@
+<?php
+/**
+ * MW-Aufnahme System - REST API
+ *
+ * Endpoints:
+ *   POST ?action=start     - Aufnahme starten (User geht online)
+ *   POST ?action=stop      - Aufnahme stoppen (User geht offline)
+ *   POST ?action=heartbeat - Heartbeat senden
+ *   GET  ?action=status    - Aktueller Status aller User
+ *   POST ?action=consent   - DSGVO-Einwilligung loggen
+ */
+
+require_once __DIR__ . '/includes/db.php';
+
+/* Dispatch-Logik nur ausfuehren wenn nicht im Test-Modus (TICKET-038).
+ * PHPUnit-Tests setzen MW_TEST_MODE und rufen die handle_*-Funktionen
+ * direkt auf, um die SQL-Vertraege zu pruefen ohne HTTP-Roundtrip. */
+if (!defined('MW_TEST_MODE') || !MW_TEST_MODE) {
+
+    /* CORS Headers für Preflight */
+    if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+        header('Access-Control-Allow-Origin: *');
+        header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+        header('Access-Control-Allow-Headers: Content-Type, X-API-Key');
+        http_response_code(204);
+        exit;
+    }
+
+    $action = $_GET['action'] ?? '';
+
+    /* Status-Endpoint braucht keinen API-Key (öffentlich für Dashboard) */
+    if ($action === 'status') {
+        handle_status();
+    }
+
+    /* Alle anderen Endpoints brauchen API-Key */
+    if (!validate_api_key()) {
+        json_response(['error' => 'Unauthorized'], 401);
+    }
+
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        json_response(['error' => 'Method not allowed'], 405);
+    }
+
+    $input = json_decode(file_get_contents('php://input'), true);
+    if (!is_array($input)) {
+        json_response(['error' => 'Invalid JSON body'], 400);
+    }
+
+    switch ($action) {
+        case 'start':
+            handle_start($input);
+            break;
+        case 'stop':
+            handle_stop($input);
+            break;
+        case 'heartbeat':
+            handle_heartbeat($input);
+            break;
+        case 'consent':
+            handle_consent($input);
+            break;
+        default:
+            json_response(['error' => 'Unknown action'], 400);
+    }
+
+} /* end !MW_TEST_MODE dispatch */
+
+/* ---- Handlers ---- */
+
+function handle_start(array $input): void
+{
+    $name = sanitize_name($input['name'] ?? '');
+    $camera = strtoupper(trim($input['camera_id'] ?? ''));
+
+    if ($name === '') {
+        json_response(['error' => 'Name is required'], 400);
+    }
+    if (!validate_camera_id($camera)) {
+        json_response(['error' => 'Invalid camera_id (A-P)'], 400);
+    }
+
+    $db = get_db();
+
+    /* Pending Resync-Flag UND zuletzt bekannte plugin_version aus der
+     * letzten Session uebernehmen (TICKET-036, TICKET-057).
+     * Verhindert (1) dass Director-Resync-Anfragen verloren gehen, wenn der
+     * User zwischen Klick und Lieferung eine neue Aufnahme startet, und
+     * (2) dass das Dashboard zwischen Aufnahme-Start und erstem Heartbeat
+     * (~30 s) "Plugin V nicht gefunden" zeigt — der naechste Heartbeat
+     * ueberschreibt das Feld eh, aber bis dahin haben wir den letzten
+     * bekannten Wert statt einer Luecke. */
+    $stmt = $db->prepare(
+        "SELECT pending_resync, plugin_version FROM sessions
+          WHERE user_name = :name AND status != 'removed'
+          ORDER BY id DESC LIMIT 1"
+    );
+    $stmt->execute([':name' => $name]);
+    $prev = $stmt->fetch();
+    $prev_pending = (int) ($prev['pending_resync'] ?? 0);
+    $prev_version = $prev['plugin_version'] ?? null;
+
+    /* Falls der User bereits online ist, zuerst alte Session schließen */
+    $stmt = $db->prepare(
+        "UPDATE sessions SET status = 'offline', stopped_at = NOW()
+         WHERE user_name = :name AND status = 'online'"
+    );
+    $stmt->execute([':name' => $name]);
+
+    /* Neue Session anlegen — last_recording_active=1, weil eine Aufnahme
+     * gerade startet. Ggf. uebernommenes pending_resync wird beim naechsten
+     * Idle-Heartbeat (nach Stop) ausgeliefert. plugin_version wird vom
+     * naechsten Heartbeat ueberschrieben, ist aber als Fallback drin damit
+     * das Dashboard nicht 30 s "v? (nicht gemeldet)" zeigt. */
+    $stmt = $db->prepare(
+        "INSERT INTO sessions (user_name, camera_id, status, started_at, last_heartbeat, pending_resync, last_recording_active, plugin_version)
+         VALUES (:name, :camera, 'online', NOW(), NOW(), :pending, 1, :pv)"
+    );
+    $stmt->execute([
+        ':name'    => $name,
+        ':camera'  => $camera,
+        ':pending' => $prev_pending,
+        ':pv'      => $prev_version,
+    ]);
+
+    json_response([
+        'ok'         => true,
+        'session_id' => (int) $db->lastInsertId(),
+        'message'    => 'Recording started',
+    ]);
+}
+
+function handle_stop(array $input): void
+{
+    $name = sanitize_name($input['name'] ?? '');
+    $camera = strtoupper(trim($input['camera_id'] ?? ''));
+
+    if ($name === '') {
+        json_response(['error' => 'Name is required'], 400);
+    }
+
+    $db = get_db();
+    $stmt = $db->prepare(
+        "UPDATE sessions SET status = 'offline', stopped_at = NOW()
+         WHERE user_name = :name AND status = 'online'"
+    );
+    $stmt->execute([':name' => $name]);
+
+    json_response([
+        'ok'      => true,
+        'message' => 'Recording stopped',
+        'updated' => $stmt->rowCount(),
+    ]);
+}
+
+function handle_heartbeat(array $input): void
+{
+    $name = sanitize_name($input['name'] ?? '');
+
+    if ($name === '') {
+        json_response(['error' => 'Name is required'], 400);
+    }
+
+    /* Offset/Sync-Method aus dem Plugin (TICKET-035).
+     * Beide Felder sind optional fuer Abwaertskompatibilitaet mit alten Plugins. */
+    $offset_ms = null;
+    if (isset($input['offset_ms']) && is_numeric($input['offset_ms'])) {
+        $val = (int) $input['offset_ms'];
+        /* Plausibilitaetsbereich: +/- 1 Tag */
+        if ($val >= -86400000 && $val <= 86400000) {
+            $offset_ms = $val;
+        }
+    }
+    $sync_method = null;
+    if (isset($input['sync_method']) && is_numeric($input['sync_method'])) {
+        $val = (int) $input['sync_method'];
+        if ($val >= 0 && $val <= 3) {
+            $sync_method = $val;
+        }
+    }
+
+    /* recording_active aus dem Plugin (TICKET-036).
+     * Wenn nicht mitgeschickt (alte Plugins): true annehmen, also keine
+     * idle-Resync-Auslieferung — defensiv. */
+    $recording_active = isset($input['recording_active'])
+        ? (bool) $input['recording_active'] : true;
+
+    /* TICKET-047: plugin_version — Semver-tolerantes Format. Maximal 20 Zeichen,
+     * nur [\w.+-]. Alles andere wird stillschweigend auf NULL gesetzt, damit
+     * alte/manipulierte Clients keine Errors verursachen. */
+    $plugin_version = null;
+    if (isset($input['plugin_version']) && is_string($input['plugin_version'])) {
+        $trimmed = trim($input['plugin_version']);
+        if (strlen($trimmed) > 0 && strlen($trimmed) <= 20
+            && preg_match('/^[\w.+-]+$/', $trimmed)) {
+            $plugin_version = $trimmed;
+        }
+    }
+
+    /* TICKET-051: offset_age_sec — Sekunden seit dem letzten erfolgreichen
+     * NTP-Sync. -1 = nie gesynct (Cold Start). Validierter Bereich [-1, 24h]
+     * — alles ausserhalb wird verworfen (NULL = "nicht gemeldet"). */
+    $offset_age_sec = null;
+    if (isset($input['offset_age_sec']) && is_numeric($input['offset_age_sec'])) {
+        $val = (int) $input['offset_age_sec'];
+        if ($val >= -1 && $val <= 86400) {
+            $offset_age_sec = $val;
+        }
+    }
+
+    /* TICKET-043: sync_lost_in_session — sticky boolean (true = das Plugin
+     * hat waehrend dieser Lifetime mindestens einmal 'recording + 3 NTP-Fails'
+     * gesehen). Sticky: einmal true gemeldet bleibt es so bis das Plugin neu
+     * geladen wird. Wir benutzen daher 1=true ODER bestehender DB-Wert; ein
+     * fehlendes Feld setzt den Wert NICHT zurueck. */
+    $sync_lost_value = null;
+    if (isset($input['sync_lost_in_session'])) {
+        $sync_lost_value = ((bool) $input['sync_lost_in_session']) ? 1 : 0;
+    }
+
+    /* TICKET-075: Remote-Diagnose-Felder. Alle optional (alte Plugins
+     * schicken sie nicht); Junk wird still zu NULL ("nicht gemeldet"). */
+    $rtt_ms = null;
+    if (isset($input['rtt_ms']) && is_numeric($input['rtt_ms'])) {
+        $val = (int) $input['rtt_ms'];
+        if ($val >= 0 && $val <= 600000) {
+            $rtt_ms = $val;
+        }
+    }
+    $applied_delta_ms = null;
+    if (isset($input['applied_delta_ms']) && is_numeric($input['applied_delta_ms'])) {
+        $val = (int) $input['applied_delta_ms'];
+        if ($val >= -86400000 && $val <= 86400000) {
+            $applied_delta_ms = $val;
+        }
+    }
+    $initial_skew_ms = null;
+    if (isset($input['initial_skew_ms']) && is_numeric($input['initial_skew_ms'])) {
+        $val = (int) $input['initial_skew_ms'];
+        if ($val >= -86400000 && $val <= 86400000) {
+            $initial_skew_ms = $val;
+        }
+    }
+
+    $db = get_db();
+
+    /* Update der LATESTEN Session des Users — auch wenn offline.
+     * Das macht Idle-Heartbeats zwischen Aufnahmen sichtbar und gibt uns
+     * einen Kanal um Resync-Kommandos im idle auszuliefern. */
+    $stmt = $db->prepare(
+        "UPDATE sessions
+           SET last_heartbeat        = NOW(),
+               offset_ms             = :offset,
+               sync_method           = :method,
+               last_recording_active = :rec,
+               plugin_version        = COALESCE(:pv, plugin_version),
+               offset_age_sec        = :age,
+               sync_lost_in_session  = GREATEST(sync_lost_in_session, COALESCE(:sl, 0)),
+               rtt_ms                = :rtt,
+               applied_delta_ms      = :delta,
+               initial_skew_ms       = COALESCE(:skew, initial_skew_ms)
+         WHERE user_name = :name AND status != 'removed'
+         ORDER BY id DESC
+         LIMIT 1"
+    );
+    $stmt->execute([
+        ':name'   => $name,
+        ':offset' => $offset_ms,
+        ':method' => $sync_method,
+        ':rec'    => $recording_active ? 1 : 0,
+        ':pv'     => $plugin_version,
+        ':age'    => $offset_age_sec,
+        ':sl'     => $sync_lost_value,
+        ':rtt'    => $rtt_ms,
+        ':delta'  => $applied_delta_ms,
+        ':skew'   => $initial_skew_ms,
+    ]);
+    $updated_rows = $stmt->rowCount();
+
+    /* Resync-Kommando nur ausliefern, wenn das Plugin gerade NICHT aufnimmt.
+     * Hard-Resync waehrend Aufnahme wuerde den Timecode zerstoeren — siehe
+     * TICKET-008 Decision Log. Flag bleibt gesetzt bis sicher geliefert. */
+    $deliver_resync = false;
+    if (!$recording_active && $updated_rows > 0) {
+        $stmt = $db->prepare(
+            "SELECT id, pending_resync FROM sessions
+              WHERE user_name = :name AND status != 'removed'
+              ORDER BY id DESC LIMIT 1"
+        );
+        $stmt->execute([':name' => $name]);
+        $row = $stmt->fetch();
+        if ($row && (int) $row['pending_resync'] === 1) {
+            /* Flag loeschen und im Response ausliefern */
+            $clear = $db->prepare(
+                "UPDATE sessions SET pending_resync = 0 WHERE id = :id"
+            );
+            $clear->execute([':id' => $row['id']]);
+            $deliver_resync = true;
+        }
+    }
+
+    $response = [
+        'ok'      => true,
+        'updated' => $updated_rows,
+    ];
+    if ($deliver_resync) {
+        $response['resync'] = true;
+    }
+    json_response($response);
+}
+
+function handle_status(): void
+{
+    $db = get_db();
+
+    /* Stale User als offline markieren */
+    mark_stale_users_offline();
+
+    /* Nur die neueste Session pro User (innerhalb 24h) */
+    $stmt = $db->prepare(
+        "SELECT s.id, s.user_name, s.camera_id, s.status, s.started_at, s.stopped_at,
+                s.last_heartbeat, s.offset_ms, s.sync_method,
+                s.pending_resync, s.last_recording_active,
+                s.plugin_version, s.offset_age_sec,
+                s.sync_lost_in_session,
+                s.rtt_ms, s.applied_delta_ms, s.initial_skew_ms
+         FROM sessions s
+         INNER JOIN (
+             SELECT user_name, MAX(id) as max_id
+             FROM sessions
+             WHERE created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)
+               AND status != 'removed'
+             GROUP BY user_name
+         ) latest ON s.id = latest.max_id
+         ORDER BY s.status DESC, s.started_at DESC"
+    );
+    $stmt->execute();
+
+    $sessions = $stmt->fetchAll();
+    $online_count = 0;
+    foreach ($sessions as $s) {
+        if ($s['status'] === 'online') {
+            $online_count++;
+        }
+    }
+
+    json_response([
+        'ok'           => true,
+        'online_count' => $online_count,
+        'sessions'     => $sessions,
+        'timestamp'    => date('Y-m-d H:i:s'),
+    ]);
+}
+
+function handle_consent(array $input): void
+{
+    $name = sanitize_name($input['name'] ?? '');
+    $consent = (bool) ($input['consent'] ?? false);
+
+    if ($name === '') {
+        json_response(['error' => 'Name is required'], 400);
+    }
+
+    $db = get_db();
+    $stmt = $db->prepare(
+        "INSERT INTO consent_log (user_name, consent_given, ip_address)
+         VALUES (:name, :consent, :ip)"
+    );
+    $stmt->execute([
+        ':name'    => $name,
+        ':consent' => $consent ? 1 : 0,
+        ':ip'      => $_SERVER['REMOTE_ADDR'] ?? '',
+    ]);
+
+    json_response([
+        'ok'      => true,
+        'message' => 'Consent logged',
+    ]);
+}

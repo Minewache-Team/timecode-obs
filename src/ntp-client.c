@@ -48,6 +48,23 @@ typedef int socket_t;
 /* NTP epoch: 1900-01-01, Unix epoch: 1970-01-01 */
 #define NTP_UNIX_DELTA 2208988800ULL
 
+/* Garbage-server floor: a server whose transmit time is before 2020 is
+ * broken or malicious — accepting it would yank the timecode by years.
+ * (Unix seconds for 2020-01-01T00:00:00Z.) */
+#define NTP_SANITY_FLOOR_UNIX 1577836800LL
+
+/* Convert a raw 32-bit NTP timestamp (seconds field) to Unix seconds with
+ * era handling: era 0 runs 1900–2036 (MSB is set for everything after
+ * 1968), era 1 starts 2036-02-07 with the MSB clear. Without this, every
+ * client breaks at the 2036 rollover — and field hardware tends to
+ * outlive its planned lifetime. Valid until ~2104. */
+static int64_t ntp_ts_to_unix_sec(uint32_t raw_sec)
+{
+	if (raw_sec & 0x80000000U)
+		return (int64_t)raw_sec - (int64_t)NTP_UNIX_DELTA;
+	return (int64_t)raw_sec + 4294967296LL - (int64_t)NTP_UNIX_DELTA;
+}
+
 /* NTP packet structure (48 bytes) */
 typedef struct {
 	uint8_t li_vn_mode;
@@ -109,34 +126,57 @@ bool ntp_query(const char *server, int timeout_ms, ntp_result_t *result)
 
 	memset(result, 0, sizeof(*result));
 
-	/* Resolve hostname */
+	/* Resolve hostname. AF_UNSPEC on purpose: a large share of German
+	 * residential connections are DS-Lite (cable ISPs) — IPv4 there is
+	 * tunneled through the provider's CGNAT (AFTR), adding latency and
+	 * jitter, while native IPv6 goes direct. The OS orders the results
+	 * (RFC 6724, IPv6 preferred when routable); we walk them until one
+	 * connects. Forcing AF_INET picked the WORSE path on those lines. */
 	struct addrinfo hints, *res;
 	memset(&hints, 0, sizeof(hints));
-	hints.ai_family = AF_INET;
+	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_DGRAM;
 
 	if (getaddrinfo(server, "123", &hints, &res) != 0)
 		return false;
 
-	/* Create UDP socket */
-	socket_t sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-	if (sock == INVALID_SOCK) {
-		freeaddrinfo(res);
-		return false;
-	}
+	socket_t sock = INVALID_SOCK;
+	for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
+		sock = socket(ai->ai_family, SOCK_DGRAM, IPPROTO_UDP);
+		if (sock == INVALID_SOCK)
+			continue;
 
-	/* Set receive timeout */
+		/* Set receive timeout */
 #ifdef _WIN32
-	/* Windows: SO_RCVTIMEO expects a DWORD (milliseconds) */
-	DWORD rcv_timeout = (DWORD)timeout_ms;
-	setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&rcv_timeout,
-		   sizeof(rcv_timeout));
+		/* Windows: SO_RCVTIMEO expects a DWORD (milliseconds) */
+		DWORD rcv_timeout = (DWORD)timeout_ms;
+		setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,
+			   (const char *)&rcv_timeout, sizeof(rcv_timeout));
 #else
-	struct timeval tv;
-	tv.tv_sec = timeout_ms / 1000;
-	tv.tv_usec = (timeout_ms % 1000) * 1000;
-	setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
+		struct timeval tv;
+		tv.tv_sec = timeout_ms / 1000;
+		tv.tv_usec = (timeout_ms % 1000) * 1000;
+		setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv,
+			   sizeof(tv));
 #endif
+
+		/* Connect the UDP socket: the kernel then discards datagrams
+		 * from any other source address/port, so an unrelated host
+		 * can't answer in the server's place. Also turns ICMP
+		 * port-unreachable into a fast recv error instead of a full
+		 * timeout — and fails immediately for an unroutable family
+		 * (IPv6 address without IPv6 uplink), falling through to the
+		 * next resolved address. */
+		if (connect(sock, ai->ai_addr, (int)ai->ai_addrlen) == 0)
+			break;
+
+		CLOSE_SOCKET(sock);
+		sock = INVALID_SOCK;
+	}
+	freeaddrinfo(res);
+
+	if (sock == INVALID_SOCK)
+		return false;
 
 	/* Build NTP request: version 4, mode 3 (client) */
 	ntp_packet_t packet;
@@ -147,14 +187,20 @@ bool ntp_query(const char *server, int timeout_ms, ntp_result_t *result)
 	int64_t t1_sec, t1_usec;
 	get_system_time(&t1_sec, &t1_usec);
 
+	/* Put T1 into the request's transmit timestamp. The server echoes it
+	 * back in originate_ts; a response that doesn't echo it is stale, a
+	 * duplicate, or spoofed — and gets dropped. Standard SNTP nonce
+	 * (RFC 4330 §5); the fractional part carries sub-µs entropy. */
+	uint32_t t1_ntp_sec = (uint32_t)((uint64_t)t1_sec + NTP_UNIX_DELTA);
+	uint32_t t1_ntp_frac = (uint32_t)((t1_usec << 32) / 1000000);
+	packet.tx_ts_sec = htonl(t1_ntp_sec);
+	packet.tx_ts_frac = htonl(t1_ntp_frac);
+
 	/* Send request */
-	if (sendto(sock, (const char *)&packet, sizeof(packet), 0, res->ai_addr, (int)res->ai_addrlen) < 0) {
+	if (send(sock, (const char *)&packet, sizeof(packet), 0) < 0) {
 		CLOSE_SOCKET(sock);
-		freeaddrinfo(res);
 		return false;
 	}
-
-	freeaddrinfo(res);
 
 	/* Receive response */
 	int n = recv(sock, (char *)&packet, sizeof(packet), 0);
@@ -173,16 +219,26 @@ bool ntp_query(const char *server, int timeout_ms, ntp_result_t *result)
 	if (packet.tx_ts_sec == 0) /* server never set transmit time */
 		return false;
 
+	/* Originate timestamp must echo our transmit timestamp (nonce). */
+	if (packet.orig_ts_sec != htonl(t1_ntp_sec) ||
+	    packet.orig_ts_frac != htonl(t1_ntp_frac))
+		return false;
+
 	/* Record T4 (client receive time) */
 	int64_t t4_sec, t4_usec;
 	get_system_time(&t4_sec, &t4_usec);
 
 	/* Extract T2 (server receive) and T3 (server transmit) */
-	int64_t t2_sec = (int64_t)ntohl(packet.rx_ts_sec) - NTP_UNIX_DELTA;
+	int64_t t2_sec = ntp_ts_to_unix_sec(ntohl(packet.rx_ts_sec));
 	int64_t t2_frac = (int64_t)ntohl(packet.rx_ts_frac);
 
-	int64_t t3_sec = (int64_t)ntohl(packet.tx_ts_sec) - NTP_UNIX_DELTA;
+	int64_t t3_sec = ntp_ts_to_unix_sec(ntohl(packet.tx_ts_sec));
 	int64_t t3_frac = (int64_t)ntohl(packet.tx_ts_frac);
+
+	/* Garbage-server guard: transmit time before 2020 means the server's
+	 * own clock is nonsense — never let it become the sync target. */
+	if (t3_sec < NTP_SANITY_FLOOR_UNIX)
+		return false;
 
 	/* Convert fractional parts to microseconds */
 	int64_t t2_usec = (t2_frac * 1000000LL) >> 32;
@@ -222,4 +278,37 @@ void ntp_corrected_time(int64_t offset_ms, int64_t *out_sec, int64_t *out_usec)
 		*out_sec = sec;
 	if (out_usec)
 		*out_usec = total_usec;
+}
+
+int ntp_select_best_sample(const ntp_result_t *samples, int count,
+			   int64_t max_rtt_ms)
+{
+	int best = -1;
+
+	if (!samples)
+		return -1;
+
+	for (int i = 0; i < count; i++) {
+		if (!samples[i].success)
+			continue;
+		if (max_rtt_ms > 0 && samples[i].roundtrip_ms > max_rtt_ms)
+			continue;
+		if (best < 0 ||
+		    samples[i].roundtrip_ms < samples[best].roundtrip_ms)
+			best = i;
+	}
+
+	return best;
+}
+
+int64_t ntp_slew_step(int64_t applied_ms, int64_t target_ms, int64_t max_step_ms)
+{
+	if (max_step_ms <= 0)
+		return applied_ms;
+	int64_t diff = target_ms - applied_ms;
+	if (diff > max_step_ms)
+		return applied_ms + max_step_ms;
+	if (diff < -max_step_ms)
+		return applied_ms - max_step_ms;
+	return target_ms;
 }

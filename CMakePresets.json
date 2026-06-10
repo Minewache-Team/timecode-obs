@@ -10,7 +10,7 @@
       "name": "template",
       "hidden": true,
       "cacheVariables": {
-        "ENABLE_FRONTEND_API": false,
+        "ENABLE_FRONTEND_API": true,
         "ENABLE_QT": false
       }
     },
@@ -42,7 +42,8 @@
       "generator": "Xcode",
       "cacheVariables": {
         "CMAKE_COMPILE_WARNING_AS_ERROR": true,
-        "ENABLE_CCACHE": true
+        "ENABLE_CCACHE": true,
+        "BUILD_TESTS": true
       }
     },
     {
@@ -66,7 +67,8 @@
       "displayName": "Windows x64 CI build",
       "description": "Build for Windows x64 on CI",
       "cacheVariables": {
-        "CMAKE_COMPILE_WARNING_AS_ERROR": true
+        "CMAKE_COMPILE_WARNING_AS_ERROR": true,
+        "BUILD_TESTS": true
       }
     },
     {
@@ -95,7 +97,8 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "CMAKE_COMPILE_WARNING_AS_ERROR": true,
-        "ENABLE_CCACHE": true
+        "ENABLE_CCACHE": true,
+        "BUILD_TESTS": true
       }
     }
   ],
@@ -141,6 +144,29 @@
       "displayName": "Ubuntu x86_64 CI",
       "description": "Ubuntu CI build for x86_64",
       "configuration": "RelWithDebInfo"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-ci-x64",
+      "configurePreset": "windows-ci-x64",
+      "configuration": "RelWithDebInfo",
+      "output": {"outputOnFailure": true},
+      "execution": {"stopOnFailure": false}
+    },
+    {
+      "name": "ubuntu-ci-x86_64",
+      "configurePreset": "ubuntu-ci-x86_64",
+      "configuration": "RelWithDebInfo",
+      "output": {"outputOnFailure": true},
+      "execution": {"stopOnFailure": false}
+    },
+    {
+      "name": "macos-ci",
+      "configurePreset": "macos-ci",
+      "configuration": "RelWithDebInfo",
+      "output": {"outputOnFailure": true},
+      "execution": {"stopOnFailure": false}
     }
   ]
 }
