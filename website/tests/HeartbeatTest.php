@@ -78,6 +78,68 @@ final class HeartbeatTest extends MwTestCase
         $this->assertSame(1, (int) $row['last_recording_active']);
     }
 
+    public function test_accepts_diagnostic_fields(): void
+    {
+        /* TICKET-075: rtt_ms / applied_delta_ms / initial_skew_ms */
+        $id = $this->seedOnlineSession('Diag');
+
+        $e = $this->callHeartbeat([
+            'name' => 'Diag',
+            'recording_active' => true,
+            'offset_ms' => 42,
+            'sync_method' => 1,
+            'rtt_ms' => 18,
+            'applied_delta_ms' => -3,
+            'initial_skew_ms' => 50000,
+        ]);
+
+        $this->assertSame(200, $e->http_status);
+        $row = $this->fetchSession($id);
+        $this->assertSame(18, (int) $row['rtt_ms']);
+        $this->assertSame(-3, (int) $row['applied_delta_ms']);
+        $this->assertSame(50000, (int) $row['initial_skew_ms']);
+    }
+
+    public function test_rejects_diagnostic_junk_as_null(): void
+    {
+        $id = $this->seedOnlineSession('DiagJunk');
+
+        $this->callHeartbeat([
+            'name' => 'DiagJunk',
+            'recording_active' => true,
+            'rtt_ms' => -5,                  /* negativ: unmoeglich */
+            'applied_delta_ms' => 999999999, /* > 1 Tag */
+            'initial_skew_ms' => 'kaputt',   /* kein Zahlwert */
+        ]);
+
+        $row = $this->fetchSession($id);
+        $this->assertNull($row['rtt_ms']);
+        $this->assertNull($row['applied_delta_ms']);
+        $this->assertNull($row['initial_skew_ms']);
+    }
+
+    public function test_initial_skew_preserved_when_missing(): void
+    {
+        /* initial_skew_ms ist ein Boot-Fakt: ein Heartbeat ohne das Feld
+         * (z.B. waehrend degraded sync) darf den letzten bekannten Wert
+         * nicht auf NULL zuruecksetzen (COALESCE-Semantik wie bei
+         * plugin_version). */
+        $id = $this->seedOnlineSession('SkewKeep');
+
+        $this->callHeartbeat([
+            'name' => 'SkewKeep',
+            'recording_active' => false,
+            'initial_skew_ms' => 50000,
+        ]);
+        $this->callHeartbeat([
+            'name' => 'SkewKeep',
+            'recording_active' => false,
+        ]);
+
+        $row = $this->fetchSession($id);
+        $this->assertSame(50000, (int) $row['initial_skew_ms']);
+    }
+
     public function test_rejects_offset_outside_plausible_range(): void
     {
         $id = $this->seedOnlineSession('Bob');

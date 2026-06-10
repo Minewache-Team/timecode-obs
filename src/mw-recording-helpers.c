@@ -97,7 +97,10 @@ int mw_build_heartbeat_body(char *buf, size_t bufsz,
 			    int64_t raw_offset_ms,
 			    int offset_age_sec,
 			    const char *plugin_version,
-			    bool sync_lost_in_session)
+			    bool sync_lost_in_session,
+			    int64_t rtt_ms,
+			    int64_t applied_delta_ms,
+			    int64_t initial_skew_ms)
 {
 	if (!buf || bufsz == 0)
 		return -1;
@@ -125,15 +128,27 @@ int mw_build_heartbeat_body(char *buf, size_t bufsz,
 		return -1;
 
 	if (have_offset) {
+		/* TICKET-075: rtt_ms (line quality — offset uncertainty is
+		 * bounded by ±rtt/2), applied_delta_ms (how far the recorded
+		 * TC currently is from the measured target — the number the
+		 * director actually cares about during a take) and
+		 * initial_skew_ms (PC clock error found at first sync,
+		 * 0 = none) ride along additively so the developer can
+		 * remote-diagnose without asking the operator anything. */
 		int m = snprintf(buf + n, bufsz - (size_t)n,
 				 ",\"offset_ms\":%lld,\"sync_method\":%d,"
 				 "\"synced\":%s,\"raw_offset_ms\":%lld,"
-				 "\"offset_age_sec\":%d",
+				 "\"offset_age_sec\":%d,\"rtt_ms\":%lld,"
+				 "\"applied_delta_ms\":%lld,"
+				 "\"initial_skew_ms\":%lld",
 				 (long long)offset_ms,
 				 sync_method,
 				 synced ? "true" : "false",
 				 (long long)raw_offset_ms,
-				 offset_age_sec);
+				 offset_age_sec,
+				 (long long)rtt_ms,
+				 (long long)applied_delta_ms,
+				 (long long)initial_skew_ms);
 		if (m < 0)
 			return -1;
 		n += m;

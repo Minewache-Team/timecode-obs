@@ -1636,6 +1636,52 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 - **Files:** `data/locale/en-US.ini`, `data/locale/de-DE.ini` (new),
   `src/ltc-source.c`, `src/auto-setup.c`.
 
+#### TICKET-075: Maximal remote diagnostics for developer/director
+- **Status:** `DONE` (0.6.3)
+- **Type:** Feature (supportability — counterpart to TICKET-074)
+- **Description:** TICKET-074 made the operator surface dumb-user-simple;
+  this ticket gives the developer/director the opposite: maximum data on
+  every remote channel, all fed from one source of truth.
+  1. **`ltc_diag_t` + `ltc_source_get_diag()`** (ltc-source.h/c): one
+     struct carrying raw/applied/delta offsets, RTT, age, method, synced,
+     sticky sync-lost, initial clock skew, fps. Heartbeat, sidecar and
+     log lines all read THIS — the same numbers everywhere. The old
+     6-out-param accessor remains as a thin wrapper.
+     `ntp_offset_ms_applied` is now volatile (cross-thread read).
+  2. **Heartbeat carries 3 new fields** (consent bumped to v3 per the
+     TICKET-048 mechanism; dialog bullet + datenschutz.php Abschnitt 3
+     row + re-consent infobox updated): `rtt_ms` (line quality — WHO has
+     the congested family line), `applied_delta_ms` (live distance of
+     the RECORDED timecode from the measured target — the number that
+     matters during a take), `initial_skew_ms` (PC clock error at first
+     sync — whose Windows clock was broken at boot; COALESCE-persisted
+     like plugin_version since it's a boot-time fact).
+  3. **Dashboard renders them**: RTT inline with colour (orange > 150 ms,
+     red > 1 s), "TC-Abw." when > ~1 frame, persistent orange line
+     "PC-Uhr war beim Start X falsch — Windows-Zeitdienst pruefen" when
+     |skew| > 2 s (delivers the TICKET-044 deferred dashboard wiring).
+  4. **One INFO log line per successful sync cycle** ("Time sync:
+     +12 ms via time.cloudflare.com (NTP, RTT 18 ms, applied +9 ms)") —
+     OBS's built-in Help → Log Files → Upload is the one log path a
+     non-technical user CAN operate, and with this line every uploaded
+     log is a timestamped measurement history of the whole evening.
+  5. **Sidecar gains post-mortem fields**: ntp_rtt_ms,
+     applied_offset_ms, applied_delta_ms, offset_age_sec,
+     initial_clock_skew_ms, sync_lost_in_session — weeks later the
+     cutter/developer can reconstruct the shoot without anyone's memory.
+  6. **Server**: idempotent migrations (rtt_ms, applied_delta_ms,
+     initial_skew_ms INT NULL), validation (junk → NULL), status + SSE
+     SELECTs extended.
+- **Verified:** 4/4 C ctest suites green (2 new gtest shape cases, 23
+  call sites migrated); **28/28 PHPUnit tests green against a real local
+  MariaDB** (3 new cases: accept, junk→NULL, skew COALESCE-preserved) —
+  first full local DB-backed run this session; PHP/JS lint clean.
+- **Files:** `src/ltc-source.{c,h}`, `src/mw-recording-helpers.{c,h}`,
+  `src/mw-recording.c`, `src/metadata-writer.c`,
+  `tests/test-mw-helpers.cpp`, `website/install.php`, `website/api.php`,
+  `website/sse.php`, `website/assets/app.js`, `website/datenschutz.php`,
+  `website/tests/HeartbeatTest.php`.
+
 #### TICKET-061: Scene form memory + +1 buttons
 - **Status:** `DONE`
 - **Type:** UX improvement (website-only)
@@ -1747,6 +1793,7 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 | Session | Date | Agent | Tickets Worked | Status at End | Notes |
 |---------|------|-------|----------------|---------------|-------|
+| 31 | 2026-06-10 | Claude (Fable) | TICKET-075 (done) | 0.6.3 ready | Gegenstück zu TICKET-074: maximale Ferndiagnose für Entwickler/Regisseur auf allen drei Kanälen, gespeist aus EINER Quelle (`ltc_diag_t`/`ltc_source_get_diag()`; alter Accessor bleibt als Wrapper). Heartbeat +3 Felder (rtt_ms = Leitungsqualität, applied_delta_ms = Live-TC-Restabweichung, initial_skew_ms = Boot-Uhrfehler, COALESCE-persistiert) mit Consent-Bump auf v3 nach TICKET-048-Verfahren (Dialog-Bullet, datenschutz.php v3 + neue Tabellenzeile + Re-Consent-Box). Dashboard rendert RTT (farbcodiert), TC-Abw. (> 1 Frame) und persistenten Uhr-Fehler-Hinweis (löst das deferred TICKET-044-Dashboard-Wiring ein). Pro erfolgreichem Sync-Zyklus eine INFO-Logzeile → jedes via OBS "Log hochladen" geteilte Log ist eine Mess-Historie des Abends. Sidecar +6 Post-Mortem-Felder. Server: idempotente Migrationen, Junk→NULL-Validierung, status+SSE-SELECTs. Verifikation: 4/4 C-Suiten grün (23 Callsites migriert, 2 neue Shape-Tests); erstmals voller lokaler DB-Lauf: **28/28 PHPUnit gegen echte MariaDB** (3 neue Fälle; install.php-Guard mit MW_TEST_MODE-Ausnahme dabei mitverifiziert). |
 | 30 | 2026-06-10 | Claude (Fable) | TICKET-074 (done) | 0.6.3 ready | Support-surface round after user context ("viele Nutzer sind strohdumm, sitzen aber WÄHREND der Nutzung im Discord mit Entwickler+Regisseur"). Consequence: the user-visible surface must be Discord-relay-grade, logs are unreachable for this audience. Shipped: de-DE.ini (full German locale — English-only warnings were de-facto invisible for this fleet; OBS picks it up on German installs, installers deploy data/ recursively anyway); warnings now carry instructions ("SOFORT im Discord melden") instead of just describing the condition; Properties status enriched with measurement age + RTT; new `_support_info` property = one dense line (version | Cam | fps | Track | method offset @age RTT | TC) explicitly labelled for screenshot/paste into Discord; auto-setup dialogs migrated MessageBoxA→W with \u escapes — UTF-8 umlauts through the ANSI API rendered "MÃ¶chtest" on German Windows since the first release (the MW dialogs got this fix in TICKET-030, auto-setup was missed). Verified: 4/4 ctest suites green, syntax-clean both frontend modes (only known system-libobs header warnings in container). |
 | 29 | 2026-06-10 | Claude (Fable) | TICKET-073 (done) | 0.6.3 ready | Family-line refinement after user clarification ("oft Familienanschlüsse — die Schwester streamt gerade Netflix"). (1) NTP-Sample-Gap 250 ms → 2000 ms: ABR-Player bursten segmentweise mit Sekunden-Pausen; drei Samples über ~4,5 s verteilt erwischen mit hoher Wahrscheinlichkeit eine Burst-Pause, eng beieinander liegende Samples sahen alle dieselbe Congestion (Min-RTT hatte nichts Besseres zur Auswahl). Kostet nur Zeit, wenn die Qualität ohnehin schlecht ist (GOOD-Sample → sofortiger Exit). (2) mw_http_post mit Timeout-Parameter: Heartbeat-Thread 10 s (eine über TLS-Setup stolpernde POST ließ die Kamera am Dashboard "offline" flackern, während sie sauber aufnimmt), Start/Stop/Consent bleiben bei 5 s weil sie auf dem OBS-UI-Thread laufen (sync curl im Frontend-Callback = vorbestehende Design-Warze, async-Dispatch als künftiges Ticket notiert). Log-Wording auf Haushalts-Realität angepasst ("Household line busy — someone streaming/uploading?"). 4/4 ctest-Suiten grün. |
 | 28 | 2026-06-10 | Claude (Fable) | TICKET-072 (done) | 0.6.3 ready | General hardening pass + network-model correction (user: "private Anschlüsse in Deutschland, eines der ekligsten Netze für so eine Aufgabe" — kein LTE-Hotspot-Szenario). Highlights: client-side JSON escaping for the display name (a quote in the name 400'd every heartbeat BEFORE server-side sanitizing → camera silently invisible; helper + 7 tests); SNTP hardening (connected UDP socket, RFC-4330 originate-timestamp nonce, 2036 era handling, pre-2020 garbage-server floor); AF_UNSPEC + address walking so DS-Lite lines use native IPv6 instead of CGNAT-tunneled IPv4; ≤60 s re-measure after mediocre-RTT cycles (evening congestion windows are minutes); loud LOG_ERROR on previously silent thread/event/encoder creation failures (TC free-running or silent audio without any hint); sidecar extension replacement basename-only + JSON-escaped path/server fields; Win32 UTF-8 conversion guarantees terminated strings, utf8_to_wide handles malloc failure, server URL tolerates trailing slash. heartbeat skips the tick on body-build failure instead of POSTing truncated JSON. 4/4 ctest suites green; only pre-existing system-libobs header warnings remain in the container check (CI builds against the real OBS SDK). |

@@ -85,6 +85,12 @@ int mw_json_escape_string(char *dst, size_t dstsz, const char *src);
  *     so the dashboard can clear a previously shown red marker. true means
  *     the plugin observed `recording_active && consecutive_sync_failures
  *     >= 3` at least once since the source was created.
+ *   - `rtt_ms`, `applied_delta_ms`, `initial_skew_ms` (TICKET-075) ride
+ *     inside the have_offset block: roundtrip of the accepted NTP sample
+ *     (line quality, offset uncertainty ≤ ±rtt/2), live distance between
+ *     the recorded timecode and the measured target (0 = converged), and
+ *     the PC clock error found at the first sync (0 = none). Disclosed in
+ *     datenschutz.php; transmitting them requires consent version >= 3.
  *
  * Returns the number of characters written (excluding the null terminator),
  * or -1 on truncation/error. Buf is always null-terminated when bufsz > 0.
@@ -99,7 +105,10 @@ int mw_build_heartbeat_body(char *buf, size_t bufsz,
 			    int64_t raw_offset_ms,
 			    int offset_age_sec,
 			    const char *plugin_version,
-			    bool sync_lost_in_session);
+			    bool sync_lost_in_session,
+			    int64_t rtt_ms,
+			    int64_t applied_delta_ms,
+			    int64_t initial_skew_ms);
 
 /*
  * Detect a director-issued re-sync command in the API response.

@@ -195,9 +195,41 @@
                 const syncMethod = (s.sync_method !== null && s.sync_method !== undefined && s.sync_method !== '')
                     ? parseInt(s.sync_method, 10) : null;
                 const offsetCls = (isOnline && offsetMs !== null) ? offsetSeverity(offsetMs) : '';
+
+                /* TICKET-075: Remote-Diagnose direkt auf der Karte.
+                 * rtt_ms = Leitungsqualitaet (Offset-Unsicherheit <= ±rtt/2;
+                 * hohe Werte = Familienanschluss gerade unter Last).
+                 * applied_delta_ms = wie weit der AUFGEZEICHNETE Timecode
+                 * gerade vom Messziel weg ist (0 = konvergiert) — die Zahl,
+                 * die waehrend eines Takes wirklich zaehlt. */
+                const rttMs = (s.rtt_ms !== null && s.rtt_ms !== undefined && s.rtt_ms !== '')
+                    ? parseInt(s.rtt_ms, 10) : null;
+                const appliedDelta = (s.applied_delta_ms !== null && s.applied_delta_ms !== undefined && s.applied_delta_ms !== '')
+                    ? parseInt(s.applied_delta_ms, 10) : null;
+                let diagDetail = '';
+                if (isOnline && rttMs !== null) {
+                    const rttCls = rttMs > 1000 ? 'offset-crit'
+                                 : rttMs > 150 ? 'offset-warn' : '';
+                    diagDetail += ' <span class="sync-label' + (rttCls ? ' ' + rttCls : '') + '">RTT ' + rttMs + 'ms</span>';
+                }
+                if (isOnline && appliedDelta !== null && Math.abs(appliedDelta) > 40) {
+                    /* Nur zeigen wenn der TC nennenswert vom Ziel abweicht
+                     * (> ~1 Frame), sonst ist es Rauschen. */
+                    diagDetail += ' <span class="' + offsetSeverity(appliedDelta) + '">TC-Abw. ' + formatOffset(appliedDelta) + '</span>';
+                }
                 const offsetLine = (isOnline && offsetMs !== null)
                     ? '<br>Drift: ' + formatOffset(offsetMs)
                     + (syncMethod ? ' <span class="sync-label">(' + syncMethodLabel(syncMethod) + ')</span>' : '')
+                    + diagDetail
+                    : '';
+
+                /* TICKET-075: PC-Uhr war beim Start massiv falsch — der
+                 * Operator soll w32time fixen, sonst startet jede Session
+                 * cold-and-bad. Persistent sichtbar (COALESCE-gespeichert). */
+                const initialSkew = (s.initial_skew_ms !== null && s.initial_skew_ms !== undefined && s.initial_skew_ms !== '')
+                    ? parseInt(s.initial_skew_ms, 10) : null;
+                const skewLine = (initialSkew !== null && Math.abs(initialSkew) > 2000)
+                    ? '<br><span class="offset-warn">PC-Uhr war beim Start ' + formatOffset(initialSkew) + ' falsch — Windows-Zeitdienst pruefen</span>'
                     : '';
 
                 /* Plugin-Version (TICKET-047) — immer sichtbar wenn vorhanden.
@@ -307,6 +339,7 @@
                     + '<br>' + timeLabel + ': ' + timeStr
                     + offsetLine
                     + lastSyncLine
+                    + skewLine
                     + versionLine
                     + '</div>'
                     + resyncBtn

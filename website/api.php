@@ -218,6 +218,30 @@ function handle_heartbeat(array $input): void
         $sync_lost_value = ((bool) $input['sync_lost_in_session']) ? 1 : 0;
     }
 
+    /* TICKET-075: Remote-Diagnose-Felder. Alle optional (alte Plugins
+     * schicken sie nicht); Junk wird still zu NULL ("nicht gemeldet"). */
+    $rtt_ms = null;
+    if (isset($input['rtt_ms']) && is_numeric($input['rtt_ms'])) {
+        $val = (int) $input['rtt_ms'];
+        if ($val >= 0 && $val <= 600000) {
+            $rtt_ms = $val;
+        }
+    }
+    $applied_delta_ms = null;
+    if (isset($input['applied_delta_ms']) && is_numeric($input['applied_delta_ms'])) {
+        $val = (int) $input['applied_delta_ms'];
+        if ($val >= -86400000 && $val <= 86400000) {
+            $applied_delta_ms = $val;
+        }
+    }
+    $initial_skew_ms = null;
+    if (isset($input['initial_skew_ms']) && is_numeric($input['initial_skew_ms'])) {
+        $val = (int) $input['initial_skew_ms'];
+        if ($val >= -86400000 && $val <= 86400000) {
+            $initial_skew_ms = $val;
+        }
+    }
+
     $db = get_db();
 
     /* Update der LATESTEN Session des Users — auch wenn offline.
@@ -231,7 +255,10 @@ function handle_heartbeat(array $input): void
                last_recording_active = :rec,
                plugin_version        = COALESCE(:pv, plugin_version),
                offset_age_sec        = :age,
-               sync_lost_in_session  = GREATEST(sync_lost_in_session, COALESCE(:sl, 0))
+               sync_lost_in_session  = GREATEST(sync_lost_in_session, COALESCE(:sl, 0)),
+               rtt_ms                = :rtt,
+               applied_delta_ms      = :delta,
+               initial_skew_ms       = COALESCE(:skew, initial_skew_ms)
          WHERE user_name = :name AND status != 'removed'
          ORDER BY id DESC
          LIMIT 1"
@@ -244,6 +271,9 @@ function handle_heartbeat(array $input): void
         ':pv'     => $plugin_version,
         ':age'    => $offset_age_sec,
         ':sl'     => $sync_lost_value,
+        ':rtt'    => $rtt_ms,
+        ':delta'  => $applied_delta_ms,
+        ':skew'   => $initial_skew_ms,
     ]);
     $updated_rows = $stmt->rowCount();
 
@@ -292,7 +322,8 @@ function handle_status(): void
                 s.last_heartbeat, s.offset_ms, s.sync_method,
                 s.pending_resync, s.last_recording_active,
                 s.plugin_version, s.offset_age_sec,
-                s.sync_lost_in_session
+                s.sync_lost_in_session,
+                s.rtt_ms, s.applied_delta_ms, s.initial_skew_ms
          FROM sessions s
          INNER JOIN (
              SELECT user_name, MAX(id) as max_id

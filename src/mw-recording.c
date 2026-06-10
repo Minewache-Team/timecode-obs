@@ -70,8 +70,11 @@
  *
  *   v1 (0.3.x – 0.5.x): name, recording_active, offset_ms, sync_method,
  *                       synced, raw_offset_ms, offset_age_sec
- *   v2 (0.6.0):         + plugin_version, sync_lost_in_session */
-#define MW_CURRENT_CONSENT_VERSION 2
+ *   v2 (0.6.0):         + plugin_version, sync_lost_in_session
+ *   v3 (0.6.3):         + rtt_ms (Leitungsqualität), applied_delta_ms
+ *                       (TC-Restabweichung), initial_skew_ms
+ *                       (PC-Uhr-Fehler beim Start) — TICKET-075 */
+#define MW_CURRENT_CONSENT_VERSION 3
 
 /* ---- Global state ---- */
 
@@ -352,23 +355,17 @@ static void *heartbeat_thread_func(void *data)
 		pthread_mutex_unlock(&g_mw.mutex);
 
 		if (enabled && consent && server[0] && name[0]) {
-			int64_t offset_ms = 0;
-			int sync_method = 0;
-			bool synced = false;
-			int64_t raw_offset_ms = 0;
-			int offset_age_sec = -1;
-			bool sync_lost_in_session = false;
-			bool have_offset = ltc_source_get_current_offset(
-				&offset_ms, &sync_method, &synced,
-				&raw_offset_ms, &offset_age_sec,
-				&sync_lost_in_session);
+			ltc_diag_t diag;
+			bool have_offset = ltc_source_get_diag(&diag);
 
 			char body[1024];
 			int blen = mw_build_heartbeat_body(
 				body, sizeof(body), name, active, have_offset,
-				offset_ms, sync_method, synced, raw_offset_ms,
-				offset_age_sec, PLUGIN_VERSION,
-				sync_lost_in_session);
+				diag.raw_offset_ms, diag.sync_method,
+				diag.synced, diag.raw_offset_ms,
+				diag.offset_age_sec, PLUGIN_VERSION,
+				diag.sync_lost_in_session, diag.rtt_ms,
+				diag.applied_delta_ms, diag.initial_skew_ms);
 			if (blen < 0) {
 				/* Never POST a truncated body — the server
 				 * would reject it anyway, and a partial JSON
@@ -387,10 +384,13 @@ static void *heartbeat_thread_func(void *data)
 
 			if (ok && have_offset) {
 				obs_log(LOG_DEBUG,
-					"MW heartbeat '%s' rec=%d offset=%lldms (age %ds) sync=%d synced=%d",
+					"MW heartbeat '%s' rec=%d offset=%lldms (age %ds, rtt %lldms, delta %+lldms) sync=%d synced=%d",
 					name, active ? 1 : 0,
-					(long long)offset_ms, offset_age_sec,
-					sync_method, synced ? 1 : 0);
+					(long long)diag.raw_offset_ms,
+					diag.offset_age_sec,
+					(long long)diag.rtt_ms,
+					(long long)diag.applied_delta_ms,
+					diag.sync_method, diag.synced ? 1 : 0);
 			} else if (ok) {
 				obs_log(LOG_DEBUG,
 					"MW heartbeat '%s' rec=%d (no LTC source)",
@@ -651,8 +651,8 @@ static LRESULT CALLBACK consent_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LPA
 		SendMessageW(title, WM_SETFONT, (WPARAM)hTitleFont, TRUE);
 		y += lh + 18;
 
-		/* Info text: what data is transmitted (10 lines) */
-		int h1 = lh * 10 + 4;
+		/* Info text: what data is transmitted (11 lines) */
+		int h1 = lh * 11 + 4;
 		HWND info1 = CreateWindowW(L"STATIC",
 					   L"Durch die MW-Aufnahme werden folgende Daten\r\n"
 					   L"an den Server \u00FCbermittelt:\r\n"
@@ -663,6 +663,7 @@ static LRESULT CALLBACK consent_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LPA
 					   L"  \u2022  Zeitstempel (Start, Stop, Heartbeat)\r\n"
 					   L"  \u2022  Plugin-Version (Support-Erkennung veralteter Installationen)\r\n"
 					   L"  \u2022  Sync-Status (Drift in ms, Sync-Methode, Alter)\r\n"
+					   L"  \u2022  Sync-Detaildaten (Leitungsqualit\u00E4t/RTT, TC-Restabweichung, Uhr-Fehler beim Start)\r\n"
 					   L"  \u2022  Sync-Verlust-Marker (f\u00FCr Post-Production)",
 					   WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, h1, hwnd, NULL, NULL, NULL);
 		SendMessageW(info1, WM_SETFONT, (WPARAM)hFont, TRUE);

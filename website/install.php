@@ -126,6 +126,21 @@ try {
         $db->exec("ALTER TABLE sessions ADD COLUMN sync_lost_in_session TINYINT(1) NOT NULL DEFAULT 0 AFTER offset_age_sec");
     } catch (PDOException $e) { /* bereits vorhanden */ }
 
+    /* TICKET-075: Remote-Diagnose-Felder. rtt_ms = Leitungsqualitaet der
+     * akzeptierten NTP-Messung (Offset-Unsicherheit <= ±rtt/2),
+     * applied_delta_ms = Live-Abstand zwischen aufgezeichnetem Timecode
+     * und Messziel (0 = konvergiert), initial_skew_ms = PC-Uhr-Fehler beim
+     * ersten Sync (0 = keiner; "wessen Windows-Uhr war beim Boot kaputt"). */
+    try {
+        $db->exec("ALTER TABLE sessions ADD COLUMN rtt_ms INT NULL AFTER sync_lost_in_session");
+    } catch (PDOException $e) { /* bereits vorhanden */ }
+    try {
+        $db->exec("ALTER TABLE sessions ADD COLUMN applied_delta_ms INT NULL AFTER rtt_ms");
+    } catch (PDOException $e) { /* bereits vorhanden */ }
+    try {
+        $db->exec("ALTER TABLE sessions ADD COLUMN initial_skew_ms INT NULL AFTER applied_delta_ms");
+    } catch (PDOException $e) { /* bereits vorhanden */ }
+
     echo "<h1>Installation erfolgreich!</h1>";
     echo "<p>Alle 3 Tabellen wurden angelegt:</p>";
     echo "<ul>";

@@ -100,21 +100,16 @@ static void write_sidecar_end(const char *recording_path,
 	 * values (ntp_synced=false, ntp_offset_ms=0) for every recording —
 	 * defeating the purpose of the audit trail. camera_id / framerate /
 	 * ntp_server stay from set_info (they don't change during a take). */
-	{
-		int64_t off = 0;
-		int method = 0;
-		bool synced = false;
-		if (ltc_source_get_current_offset(&off, &method, &synced, NULL,
-						  NULL, NULL)) {
-			mw->ntp_synced = synced;
-			mw->ntp_offset_ms = off;
-			const char *m = (method == SYNC_METHOD_NTP) ? "NTP"
-				      : (method == SYNC_METHOD_HTTP)
-						? "HTTP"
-						: "local";
-			snprintf(mw->sync_method, sizeof(mw->sync_method), "%s",
-				 m);
-		}
+	ltc_diag_t diag;
+	bool have_diag = ltc_source_get_diag(&diag);
+	if (have_diag) {
+		mw->ntp_synced = diag.synced;
+		mw->ntp_offset_ms = diag.raw_offset_ms;
+		const char *m = (diag.sync_method == SYNC_METHOD_NTP) ? "NTP"
+			      : (diag.sync_method == SYNC_METHOD_HTTP)
+					? "HTTP"
+					: "local";
+		snprintf(mw->sync_method, sizeof(mw->sync_method), "%s", m);
 	}
 
 	time_t now = time(NULL);
@@ -160,6 +155,25 @@ static void write_sidecar_end(const char *recording_path,
 	fprintf(f, "  \"ntp_offset_ms\": %lld,\n",
 		(long long)mw->ntp_offset_ms);
 	fprintf(f, "  \"sync_method\": \"%s\",\n", mw->sync_method);
+	if (have_diag) {
+		/* TICKET-075: post-mortem diagnostics. The cutter/developer
+		 * reading this weeks later sees the line quality, how far the
+		 * recorded TC was from target at stop, whether the PC clock
+		 * was broken at boot, and whether sync was lost mid-take —
+		 * without anyone having to remember the shoot evening. */
+		fprintf(f, "  \"ntp_rtt_ms\": %lld,\n",
+			(long long)diag.rtt_ms);
+		fprintf(f, "  \"applied_offset_ms\": %lld,\n",
+			(long long)diag.applied_offset_ms);
+		fprintf(f, "  \"applied_delta_ms\": %lld,\n",
+			(long long)diag.applied_delta_ms);
+		fprintf(f, "  \"offset_age_sec\": %d,\n",
+			diag.offset_age_sec);
+		fprintf(f, "  \"initial_clock_skew_ms\": %lld,\n",
+			(long long)diag.initial_skew_ms);
+		fprintf(f, "  \"sync_lost_in_session\": %s,\n",
+			diag.sync_lost_in_session ? "true" : "false");
+	}
 	fprintf(f, "  \"recording_start\": \"%s\",\n", start_iso);
 	fprintf(f, "  \"recording_stop\": \"%s\",\n", end_iso);
 	fprintf(f, "  \"duration_seconds\": %.0f,\n", duration);

@@ -152,9 +152,12 @@ struct ltc_source_context {
 	volatile int64_t ntp_target_offset_ms;
 
 	/* Applied offset: what encode_next_frame actually uses each frame.
-	 * Single writer (video thread, in encode_next_frame), single reader
-	 * (same thread). Slewed toward ntp_target_offset_ms. */
-	int64_t ntp_offset_ms_applied;
+	 * Single writer (video thread, in encode_next_frame); also read by
+	 * the diag accessor from other threads (volatile for visibility —
+	 * the raw-applied delta is the live "how wrong is the recorded TC
+	 * right now" number on the dashboard). Slewed toward
+	 * ntp_target_offset_ms. */
+	volatile int64_t ntp_offset_ms_applied;
 
 	/* Last raw measurement + when it arrived — exposed to the dashboard
 	 * via the offset accessor so directors see actual sync quality, not
@@ -352,6 +355,23 @@ static void *ntp_sync_thread(void *data)
 			bool was_degraded =
 				(ctx->consecutive_sync_failures > 0) ||
 				!ctx->ntp_synced;
+			/* One INFO line per successful cycle. Users can't dig
+			 * out logs, but OBS's "Help → Log Files → Upload" can
+			 * — and with this line every uploaded log carries the
+			 * full timestamped measurement history ("warum war
+			 * Kamera C um 21:34 daneben?") without anyone having
+			 * to reproduce the situation. Steady state is one
+			 * line per 5 min — negligible log volume. */
+			obs_log(LOG_INFO,
+				"Time sync: %+lld ms via %s (%s, RTT %lld ms, "
+				"applied %+lld ms)",
+				(long long)result.offset_ms,
+				method == SYNC_METHOD_NTP
+					? (best_server ? best_server : "?")
+					: "HTTP Date",
+				method == SYNC_METHOD_NTP ? "NTP" : "fallback",
+				(long long)result.roundtrip_ms,
+				(long long)ctx->ntp_offset_ms_applied);
 			ctx->ntp_target_offset_ms = result.offset_ms;
 			ctx->ntp_last_raw_offset_ms = result.offset_ms;
 			ctx->ntp_last_sync_ns = os_gettime_ns();
@@ -1293,21 +1313,16 @@ static struct obs_source_info ltc_source_info = {
 	.video_tick = ltc_source_video_tick,
 };
 
-/* ---- Cross-module accessor: read offset from first LTC source ---- */
+/* ---- Cross-module accessor: diagnostic snapshot of first LTC source ---- */
 
-struct offset_accessor_state {
+struct diag_accessor_state {
 	bool found;
-	int64_t offset_ms;
-	int sync_method;
-	bool synced;
-	int64_t raw_offset_ms;
-	int offset_age_sec;
-	bool sync_lost_in_session;
+	ltc_diag_t diag;
 };
 
-static bool offset_accessor_cb(void *data, obs_source_t *source)
+static bool diag_accessor_cb(void *data, obs_source_t *source)
 {
-	struct offset_accessor_state *st = data;
+	struct diag_accessor_state *st = data;
 	if (!source || st->found)
 		return true;
 
@@ -1320,64 +1335,76 @@ static bool offset_accessor_cb(void *data, obs_source_t *source)
 	if (!ctx)
 		return true;
 
-	/* Report the latest RAW measurement (not the slewed applied value).
-	 * Directors need to see actual sync quality — slewing only changes
-	 * how fast the encoder absorbs the new measurement, not the
-	 * measurement itself. */
-	st->offset_ms = ctx->ntp_last_raw_offset_ms;
-	st->raw_offset_ms = ctx->ntp_last_raw_offset_ms;
-	st->sync_method = (int)ctx->sync_method;
-	st->synced = ctx->ntp_synced;
-	st->sync_lost_in_session = ctx->sync_lost_in_session;
+	/* raw = the actual measurement (sync quality), applied = what the
+	 * encoder is using; their delta is the live "how far is the
+	 * recorded TC from correct" number. All volatile, lock-free. */
+	int64_t raw = ctx->ntp_last_raw_offset_ms;
+	int64_t applied = ctx->ntp_offset_ms_applied;
+	st->diag.raw_offset_ms = raw;
+	st->diag.applied_offset_ms = applied;
+	st->diag.applied_delta_ms = raw - applied;
+	st->diag.rtt_ms = ctx->ntp_roundtrip_ms;
+	st->diag.sync_method = (int)ctx->sync_method;
+	st->diag.synced = ctx->ntp_synced;
+	st->diag.sync_lost_in_session = ctx->sync_lost_in_session;
+	st->diag.initial_skew_ms = ctx->initial_clock_skew_ms;
+	st->diag.nominal_fps = ctx->nominal_fps;
 	uint64_t last_ns = ctx->ntp_last_sync_ns;
 	if (last_ns == 0) {
-		st->offset_age_sec = -1; /* never synced */
+		st->diag.offset_age_sec = -1; /* never synced */
 	} else {
 		uint64_t now_ns = os_gettime_ns();
 		uint64_t age_ns = (now_ns > last_ns) ? (now_ns - last_ns) : 0;
-		st->offset_age_sec = (int)(age_ns / 1000000000ULL);
+		st->diag.offset_age_sec = (int)(age_ns / 1000000000ULL);
 	}
 	st->found = true;
 	return false; /* stop enumeration */
 }
 
+bool ltc_source_get_diag(ltc_diag_t *out)
+{
+	struct diag_accessor_state st;
+	memset(&st, 0, sizeof(st));
+	obs_enum_sources(diag_accessor_cb, &st);
+
+	if (!out)
+		return st.found;
+
+	if (!st.found) {
+		memset(out, 0, sizeof(*out));
+		out->offset_age_sec = -1;
+		out->sync_method = (int)SYNC_METHOD_NONE;
+		return false;
+	}
+
+	*out = st.diag;
+	return true;
+}
+
+/* Back-compat wrapper around ltc_source_get_diag() — reports the latest
+ * RAW measurement (not the slewed applied value): directors need actual
+ * sync quality, slewing only changes how fast the encoder absorbs it. */
 bool ltc_source_get_current_offset(int64_t *offset_ms, int *sync_method,
 				   bool *synced, int64_t *raw_offset_ms,
 				   int *offset_age_sec,
 				   bool *sync_lost_in_session)
 {
-	struct offset_accessor_state st = {0};
-	obs_enum_sources(offset_accessor_cb, &st);
-
-	if (!st.found) {
-		if (offset_ms)
-			*offset_ms = 0;
-		if (sync_method)
-			*sync_method = (int)SYNC_METHOD_NONE;
-		if (synced)
-			*synced = false;
-		if (raw_offset_ms)
-			*raw_offset_ms = 0;
-		if (offset_age_sec)
-			*offset_age_sec = -1;
-		if (sync_lost_in_session)
-			*sync_lost_in_session = false;
-		return false;
-	}
+	ltc_diag_t d;
+	bool found = ltc_source_get_diag(&d);
 
 	if (offset_ms)
-		*offset_ms = st.offset_ms;
+		*offset_ms = d.raw_offset_ms;
 	if (sync_method)
-		*sync_method = st.sync_method;
+		*sync_method = d.sync_method;
 	if (synced)
-		*synced = st.synced;
+		*synced = d.synced;
 	if (raw_offset_ms)
-		*raw_offset_ms = st.raw_offset_ms;
+		*raw_offset_ms = d.raw_offset_ms;
 	if (offset_age_sec)
-		*offset_age_sec = st.offset_age_sec;
+		*offset_age_sec = d.offset_age_sec;
 	if (sync_lost_in_session)
-		*sync_lost_in_session = st.sync_lost_in_session;
-	return true;
+		*sync_lost_in_session = d.sync_lost_in_session;
+	return found;
 }
 
 /* ---- Cross-module trigger: kick every LTC source's NTP thread ---- */
