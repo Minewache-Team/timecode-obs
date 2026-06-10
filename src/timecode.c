@@ -102,13 +102,36 @@ bool timecode_from_unix(int64_t unix_sec, int64_t unix_usec, tc_framerate_t fps,
 	out->seconds = s;
 	out->frames = f;
 
-	/* Drop-frame adjustment for 29.97 fps:
-	 * Drop frames 0 and 1 at the start of each minute,
-	 * EXCEPT every 10th minute. */
+	/* Drop-frame (29.97): standard SMPTE 12M renumbering. The label
+	 * sequence must advance by exactly one per LTC frame — decoders and
+	 * NLEs rely on that to lock. Deriving the label from the wall clock
+	 * at nominal 30 fps and clamping frames 0/1 to 2 (old behaviour)
+	 * emitted the same label up to three times at every non-10th minute
+	 * boundary, because nominal numbering runs 0.1% fast within each
+	 * minute and the clamp re-aligned it in one step. Instead: count
+	 * elapsed 29.97 fps frame periods since midnight, then apply the
+	 * drop-frame renumbering (skip labels :00/:01 at each minute except
+	 * every 10th). The label deviates from the wall clock by at most
+	 * ~2 frames (66 ms) just before each minute mark — that is the
+	 * defined drop-frame behaviour, invisible to humans and identical
+	 * on every camera (same wall clock in, same label out). */
 	if (fps == TC_FPS_29_97_DF) {
-		if (f < 2 && s == 0 && (m % 10) != 0) {
-			out->frames = 2;
-		}
+		int64_t day_ms = day_seconds * 1000 + unix_usec / 1000;
+		/* Elapsed frames at 30000/1001 fps since midnight */
+		int64_t total = (day_ms * 30000) / 1001000;
+		/* Renumber into label space: per 10-minute block (17982
+		 * frames) 18 labels were dropped; within the block, 2 more
+		 * for every full minute past the first (1798 frames each). */
+		int64_t blocks = total / 17982;
+		int64_t rem = total % 17982;
+		if (rem < 2)
+			rem = 2; /* first two frames of a block belong to the
+				  * non-dropping 10th minute */
+		total += 18 * blocks + 2 * ((rem - 2) / 1798);
+		out->frames = (uint8_t)(total % 30);
+		out->seconds = (uint8_t)((total / 30) % 60);
+		out->minutes = (uint8_t)((total / 1800) % 60);
+		out->hours = (uint8_t)((total / 108000) % 24);
 	}
 
 	return true;

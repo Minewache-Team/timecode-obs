@@ -109,6 +109,7 @@ struct ltc_source_context {
 	float audio_buf[AUDIO_BUF_FRAMES];
 	struct obs_source_audio audio_output;
 	uint64_t next_audio_ts;
+	double sample_accum; /* fractional samples carried across ticks */
 
 	/* NTP sync thread */
 	pthread_t ntp_thread;
@@ -290,6 +291,12 @@ static void *ntp_sync_thread(void *data)
 			ctx->consecutive_sync_failures = 0;
 			if (!ctx->first_sync_done) {
 				ctx->first_sync_done = true;
+				/* Restart the burst pattern from here: if the
+				 * network came up late, the failure cycles
+				 * already consumed the counter and the
+				 * stabilisation measurements (TICKET-049)
+				 * would be skipped entirely. */
+				cycle_count = 0;
 				/* Initial sync — encoder will pick this up via
 				 * the !frame_valid path. */
 				/* TICKET-044: detect a wildly wrong PC clock on
@@ -381,7 +388,18 @@ static void *ntp_sync_thread(void *data)
 		 */
 		cycle_count++;
 		unsigned long phase_sec;
-		if (cycle_count <= 3)
+		if (!ctx->first_sync_done) {
+			/* No usable sync yet — either a cold start where the
+			 * network came up slower than OBS (PCs regularly boot
+			 * faster than the WiFi/router in the field), or a
+			 * long outage reset the flag (TICKET-040). The burst
+			 * cycles must not be burned against a dead network
+			 * and then go quiet for sync_interval_sec: keep
+			 * retrying at burst pace until the first success. A
+			 * fully failed chain already spends ~30 s in
+			 * timeouts, so this cannot hammer any server. */
+			phase_sec = 2;
+		} else if (cycle_count <= 3)
 			phase_sec = 2;
 		else if (cycle_count <= 5)
 			phase_sec = 10;
@@ -704,11 +722,25 @@ static void ltc_source_video_tick(void *data, float seconds)
 		return;
 	}
 
-	int samples_needed = (int)(seconds * SAMPLE_RATE);
-	if (samples_needed <= 0)
-		samples_needed = SAMPLE_RATE / 30;
-	if (samples_needed > AUDIO_BUF_FRAMES)
-		samples_needed = AUDIO_BUF_FRAMES;
+	/* Accumulate fractional samples across ticks. Truncating each tick
+	 * independently drops ~0.5 samples per tick on average, so the audio
+	 * timeline falls behind real time by ~0.6 ms/s until the 200 ms
+	 * resync below fires — which put a periodic timestamp jump (= a gap
+	 * in the LTC track) into every recording longer than a few minutes. */
+	ctx->sample_accum += (double)seconds * SAMPLE_RATE;
+	if (ctx->sample_accum > AUDIO_BUF_FRAMES) {
+		/* Long stall (scene load, system sleep): drop the backlog
+		 * instead of bursting it out — the timestamp resync below
+		 * re-anchors the timeline to 'now' in that case anyway. */
+		ctx->sample_accum = AUDIO_BUF_FRAMES;
+	}
+	int samples_needed = (int)ctx->sample_accum;
+	if (samples_needed <= 0) {
+		/* Less than one sample elapsed — nothing to emit this tick. */
+		pthread_mutex_unlock(&ctx->encoder_mutex);
+		return;
+	}
+	ctx->sample_accum -= samples_needed;
 
 	int buf_pos = 0;
 	while (buf_pos < samples_needed) {

@@ -219,7 +219,14 @@
                 const versionLine = '<br><span class="' + versionCls + '">Plugin: ' + versionTxt + '</span>';
 
                 /* Letzte-Sync-Zeit (TICKET-051) — nur sichtbar bei Online,
-                 * mit Farbcode bei Staleness. -1 = nie gesynct (rot). */
+                 * mit Farbcode bei Staleness. -1 = nie gesynct (rot).
+                 * Schwellen relativ zum Standard-Sync-Intervall des Plugins
+                 * (300 s): ein Alter bis zu einem vollen Intervall + Puffer
+                 * ist der NORMALE Betriebszustand, kein Warnsignal. Die
+                 * alten Schwellen (180 s) faerbten jede gesunde Kamera in
+                 * den letzten 2 Minuten jedes Zyklus orange — der Regisseur
+                 * lernt dann, orange zu ignorieren. Gruen: < Intervall+30 s.
+                 * Orange: ein verpasster Zyklus. Rot: 2+ verpasste Zyklen. */
                 const ageRaw = (s.offset_age_sec !== null && s.offset_age_sec !== undefined && s.offset_age_sec !== '')
                     ? parseInt(s.offset_age_sec, 10) : null;
                 let lastSyncLine = '';
@@ -229,10 +236,11 @@
                     if (ageRaw < 0) {
                         cls = 'sync-old';
                         txt = 'nie gesynct';
-                    } else if (ageRaw < 180) {
+                    } else if (ageRaw < 330) {
                         cls = 'sync-fresh';
-                        txt = 'vor ' + ageRaw + ' s';
-                    } else if (ageRaw < 480) {
+                        txt = ageRaw < 120 ? 'vor ' + ageRaw + ' s'
+                                           : 'vor ' + Math.round(ageRaw / 60) + ' Min';
+                    } else if (ageRaw < 630) {
                         cls = 'sync-stale';
                         txt = 'vor ' + Math.round(ageRaw / 60) + ' Min';
                     } else {

@@ -320,6 +320,85 @@ TEST(LTCRoundtripTest, ContinuousTimecodeSequence25fps)
 }
 
 /*
+ * Production path since TICKET-040: ltc-source.c calls set_timecode before
+ * EVERY encoded frame (wall-clock locked; inc_timecode is no longer used).
+ * Verify that this still produces a decodable stream whose timecode
+ * advances by exactly one per frame — i.e. set_timecode does not glitch
+ * the biphase encoder state at frame boundaries.
+ */
+TEST(LTCRoundtripTest, SetTimecodeEveryFrameIsContinuous)
+{
+	const int sample_rate = 48000;
+	const int fps = 25;
+	const int spf = sample_rate / fps;
+	const int num_frames = 50;
+
+	ltc_wrapper_t *w = ltc_wrapper_create(sample_rate, TC_FPS_25);
+	ASSERT_NE(w, nullptr);
+
+	LTCDecoder *decoder = ltc_decoder_create(spf, 32);
+	ASSERT_NE(decoder, nullptr);
+
+	/* Stream frame by frame and drain the decoder as we go — the
+	 * decoder's internal queue holds only 32 frames, so feeding the
+	 * whole take in one write would silently drop the oldest frames
+	 * and fake a decode failure. */
+	LTCFrameExt frame;
+	int64_t prev_idx = -1;
+	int decoded_count = 0;
+	auto drain = [&]() {
+		while (ltc_decoder_read(decoder, &frame)) {
+			SMPTETimecode stime;
+			ltc_frame_to_time(&stime, &frame.ltc, 0);
+			int64_t idx = ((stime.hours * 60 + stime.mins) * 60 +
+				       stime.secs) * (int64_t)fps + stime.frame;
+			if (prev_idx >= 0) {
+				EXPECT_EQ(idx, prev_idx + 1)
+					<< "TC discontinuity at decoded frame "
+					<< decoded_count << ": "
+					<< (int)stime.hours << ":"
+					<< (int)stime.mins << ":"
+					<< (int)stime.secs << ":"
+					<< (int)stime.frame;
+			}
+			prev_idx = idx;
+			decoded_count++;
+		}
+	};
+
+	/* TC sequence crossing a second boundary: 10:00:00:20 onward */
+	int h = 10, m = 0, s = 0, f = 20;
+	ltcsnd_sample_t byte_buf[4800];
+	for (int i = 0; i < num_frames; i++) {
+		ltc_wrapper_set_timecode(w, h, m, s, f, 26, 6, 10, 3);
+		float buffer[4800];
+		int n = ltc_wrapper_encode_frame(w, buffer, 4800);
+		ASSERT_GT(n, 0);
+		for (int j = 0; j < n; j++) {
+			byte_buf[j] = (ltcsnd_sample_t)((buffer[j] * 128.0f) +
+							128.0f);
+		}
+		ltc_decoder_write(decoder, byte_buf, (size_t)n, 0);
+		drain();
+		if (++f >= fps) {
+			f = 0;
+			if (++s >= 60) {
+				s = 0;
+				m++;
+			}
+		}
+	}
+	drain();
+
+	EXPECT_GT(decoded_count, num_frames - 5)
+		<< "Expected to decode nearly all frames from the "
+		   "set_timecode-per-frame stream";
+
+	ltc_decoder_free(decoder);
+	ltc_wrapper_destroy(w);
+}
+
+/*
  * Camera IDs above 7 (Kamera I-P, ids 8-15) must reach user7 as well.
  * Regression test: the wrapper used to silently drop ids > 7 after the
  * dropdown was expanded to A-P in 0.4.0.

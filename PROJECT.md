@@ -1419,6 +1419,59 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
   the complete sidecar is written in one shot then).
 - **Files:** `src/ltc-source.c`, `src/metadata-writer.c`.
 
+#### TICKET-070: Use-case logic audit — audio-timeline drift, dead-network cold start, drop-frame duplicates, dashboard cry-wolf
+- **Status:** `DONE` (0.6.3)
+- **Type:** Bug (logic; each looks correct until run against the field use case)
+- **Description:** Four bugs whose code reads plausibly but breaks under
+  real shoot conditions (decentralized home networks across Germany,
+  evening sessions, PCs booting faster than routers):
+  1. **Periodic gap in the LTC track.** `video_tick` truncated
+     `(int)(seconds * SAMPLE_RATE)` per tick, losing ~0.5 samples/tick on
+     average. The audio timeline drifted behind real time ~0.6 ms/s until
+     the 200 ms safety resync fired — a timestamp jump (= LTC dropout +
+     up-to-200 ms wobble against the voice/game tracks) roughly every
+     5 minutes in every recording. Fixed with a fractional-sample
+     accumulator (`sample_accum`); the 200 ms reset remains for genuine
+     stalls, and a long-stall cap drops backlog instead of bursting it.
+     Also removed the fabricated `SAMPLE_RATE/30` output on zero-length
+     ticks (audio that corresponded to no elapsed time).
+  2. **Cold-start burst wasted on a dead network.** TICKET-049's fast
+     cycles (3×2 s, 2×10 s) ran on a wall-clock schedule, so when OBS
+     started before the WiFi/router was up (the common field sequence),
+     all burst cycles failed and the next attempt waited a full
+     `sync_interval_sec` (default 5 min) — recordings could start with
+     raw local-clock TC. Now: while `first_sync_done` is false the thread
+     retries at burst pace (a fully failed chain itself takes ~30 s, so
+     no server hammering), and `cycle_count` resets on the first success
+     so the stabilisation measurements still happen.
+  3. **Drop-frame emitted duplicate labels.** The wall-clock-at-nominal-30
+     mapping with a 0/1→2 clamp produced the same label up to three times
+     at every non-10th minute boundary (nominal numbering runs 0.1% fast,
+     the clamp re-aligned in one step) — LTC decoders/NLEs see a stalled
+     TC and lose lock. Replaced with the standard SMPTE 12M renumbering
+     (count elapsed 29.97 frame periods since midnight, skip :00/:01
+     labels per minute except every 10th). Labels now advance strictly
+     (+1, or +3 in nominal index space at drop points) and deviate from
+     the wall clock by at most the defined ~2 frames. Tests updated to
+     canonical expectations + new monotonicity test across a drop
+     boundary.
+  4. **Dashboard staleness thresholds contradicted the sync interval.**
+     "Letzte Sync" turned orange at 180 s while the default (and
+     template) sync interval is 300 s — every healthy camera cycled
+     green→orange, training the director to ignore orange. Thresholds now
+     interval-aware: green < 330 s (one full cycle + slack), orange
+     < 630 s (one missed cycle), red beyond.
+  Also added `LTCRoundtripTest.SetTimecodeEveryFrameIsContinuous`: the
+  production encode path (set_timecode before EVERY frame, TICKET-040)
+  had no decode-continuity coverage — the existing continuity test only
+  exercised the no-longer-used `inc_timecode` path. The new test confirms
+  the per-frame set_timecode stream decodes as a strict +1 sequence
+  (test feeds the decoder frame-by-frame; its internal queue holds only
+  32 frames).
+- **Files:** `src/ltc-source.c`, `src/timecode.c`,
+  `tests/test-timecode.cpp`, `tests/test-ltc-roundtrip.cpp`,
+  `website/assets/app.js`.
+
 #### TICKET-061: Scene form memory + +1 buttons
 - **Status:** `DONE`
 - **Type:** UX improvement (website-only)
@@ -1528,6 +1581,7 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 | Session | Date | Agent | Tickets Worked | Status at End | Notes |
 |---------|------|-------|----------------|---------------|-------|
+| 26 | 2026-06-10 | Claude (Fable) | TICKET-070 (done) | 0.6.3 ready | Use-case logic audit ("plausibel bis man an den Drehtag denkt"). (1) video_tick sample truncation drained ~0.6 ms/s from the audio timeline → 200 ms timestamp resync ≈ every 5 min = periodic LTC dropout + wobble vs. other tracks in EVERY long recording; fixed via fractional-sample accumulator + removed fabricated 33 ms output on zero ticks. (2) Cold-start burst ran on wall-clock schedule — PC boots before router (dezentrale Heimnetze!), burst verpufft, dann 5 min Funkstille; now burst-pace retry while never-synced, cycle_count reset on first success. (3) Drop-frame mapping emitted duplicate labels at minute boundaries (decoder/NLE lock loss); replaced with standard SMPTE 12M renumbering, tests updated + monotonicity test. (4) Dashboard "Letzte Sync" turned orange at 180 s with a 300 s default sync interval — healthy cameras cycled orange (cry-wolf); thresholds now 330/630 s. New regression test for the actual production encode path (set_timecode per frame): initial failure was a test-harness artifact (decoder queue holds 32 frames — must drain incrementally); with correct streaming the path decodes as strict +1 sequence, confirming TICKET-040's encoder usage is sound. All 4 ctest suites green (15 timecode tests incl. 3 new/updated DF, 13 roundtrip incl. new production-path test); -Wall -Wextra -Werror clean both frontend modes; app.js node --check clean. |
 | 25 | 2026-06-10 | Claude (Fable) | TICKET-069 (done) | 0.6.3 ready | Non-security functional cleanup pass. (1) Properties UI: the NTP-status and current-timecode info lines showed only their static labels — the actual values were never rendered (the timecode was even computed and thrown away). Both now show live snapshots, finally using the dead `NTPSynced`/`HTTPSynced`/`NTPNotSynced` locale keys. (2) Metadata sidecar reported create-time sync values (`ntp_synced=false`, `offset=0`) for every recording because `set_info` only runs on settings changes; `write_sidecar_end` now pulls live state via `ltc_source_get_current_offset()`. (3) Sidecar framerate wrote "30" for 29.97df — the classic mixup that breaks Resolve sync; added `fps_label_str()` returning "29.97". Removed dead `write_sidecar_start()` + the no-op record-path fetch in the STARTED handler. Verified: compiles clean with `-Wall -Wextra -Werror` both with and without `ENABLE_FRONTEND_API`; 4/4 ctest suites green. |
 | 24 | 2026-06-10 | Claude (Fable) | TICKET-065, 066, 067, 068 (all done) | 0.6.3 ready | Full cross-layer audit follow-up. Plugin/build: (065) install.sh never deployed libltc.so → Linux plugin load failure; now copies + verifies it, and CMakeLists sets `$ORIGIN` RPATH on Linux so the loader resolves libltc next to the plugin (mirrors the macOS Frameworks RPATH). CI: (066) removed `continue-on-error: true` from all three `Run Tests` jobs — the step could never fail the build, so a red test still shipped a green artifact; suites are network-free so no flake risk. Template: (067) the MW scene collection stored `ntp_sync_interval` but the plugin reads `sync_interval`, so the configured value was silently dead (and `5` would've meant 5 s); renamed to `sync_interval: 300`, added explicit `audio_track`/`camera_id`. Website: (068) scene_name was HTML-escaped before DB storage AND on output (double-encoding `A&B`→`A&amp;B`); the delete button used `addslashes(htmlspecialchars())` in a JS-in-attribute context (replaced with `htmlspecialchars(json_encode(),ENT_QUOTES)`); install.php was re-runnable by any visitor (added `.install_complete` marker guard, test-mode exempt). Verified: 4/4 C ctest suites green; PHP lint clean on all touched files; JSON/YAML/bash all parse. Audited but deliberately NOT changed (false positives or out-of-scope): Inno Setup already fails loudly on missing libltc.dll (no skipif on that line); Linux ctest finds libltc via CMake's automatic build-tree RPATH (standalone run confirmed); RecTracks appears twice but legitimately (SimpleOutput + AdvOut are different output modes); time-of-day-derived drop-frame TC is an accepted design tradeoff, not touched to avoid regressions. |
 | 23 | 2026-06-10 | Claude (Fable) | TICKET-063 (done), TICKET-064 (done) | 0.6.3 ready | Root-cause session for the cutter report "offsets got worse after sync" (30 fps shoot). Found + fixed three sync bugs: (1) TICKET-059's between-takes instant offset apply only fired when MW Aufnahme was enabled — `ltc_source_signal_recording_stopped()` sat behind `if (!g_mw.enabled) return;` in `on_frontend_event`, so unconfigured cameras kept stale applied offsets all day while MW cameras snapped correct → relative offsets across the fleet got worse, confirming the field suspicion. Call hoisted above the enabled/consent gates. (2) Recording slew rate was a 1000× math error: 1 ms/frame ≈ 30,000 ppm at 30 fps (Decision Log claimed 25 ppm). Takes that started with a stale offset got a non-linear TC ramp baked in → clips aligned at the sync point drift apart over their duration. Now 1 ms per 40 s of media (true 25 ppm) via frame-counter gating. (3) Sync-loss(≥3)+recovery mid-recording hard-jumped TC inside the file because `!first_sync_done` bypassed the recording check; now gated, and the recovery edge survives until the first idle frame instead of being consumed-and-dropped during recording. Also: TICKET-064 — camera IDs 8–15 (Kamera I–P) were silently never written to LTC user7 (`camera_id <= 7` guard missed in the TICKET-032 expansion); fixed + regression test `CameraIDUpperRangeRoundtrip`. Bonus: unguarded `obs_frontend_recording_active()` in the TICKET-043 block broke `ENABLE_FRONTEND_API=OFF` builds — wrapped in `#ifdef`. Verified: 4/4 standalone ctest suites green (timecode, ntp-offset, ltc-roundtrip incl. new test, mw-helpers); `ltc-source.c`/`mw-recording.c` syntax-clean against system libobs headers with and without frontend API. buildspec bumped to 0.6.3. |
