@@ -8,6 +8,25 @@
 
 require_once __DIR__ . '/includes/db.php';
 
+/* Schutz gegen wiederholtes/unbefugtes Ausfuehren in Produktion.
+ * install.php legt Tabellen an und macht ALTER TABLEs — das soll genau
+ * einmal beim Setup laufen, nicht von beliebigen Besuchern wiederholt
+ * abrufbar sein (Schema-Probing, versehentliche Migrationslaeufe). Nach
+ * erfolgreichem Lauf wird ein Marker geschrieben; danach verweigert das
+ * Skript den Dienst, bis der Admin den Marker (oder die Datei) entfernt.
+ * Tests umgehen das ueber MW_TEST_MODE (frische _test-DB pro Lauf). */
+if (!defined('MW_TEST_MODE') || !MW_TEST_MODE) {
+    $install_marker = __DIR__ . '/.install_complete';
+    if (file_exists($install_marker)) {
+        http_response_code(403);
+        echo "<h1>Installation bereits abgeschlossen</h1>";
+        echo "<p>Loesche die Datei <code>install.php</code> (empfohlen) "
+            . "oder den Marker <code>.install_complete</code>, um erneut "
+            . "zu installieren.</p>";
+        exit;
+    }
+}
+
 try {
     $db = get_db();
 
@@ -115,6 +134,13 @@ try {
     echo "<li><strong>consent_log</strong> - DSGVO-Einwilligungen</li>";
     echo "</ul>";
     echo "<p style='color:red;'><strong>WICHTIG:</strong> Lösche oder benenne diese Datei um!</p>";
+
+    /* Marker schreiben, damit ein erneuter Aufruf abgewiesen wird (siehe
+     * Guard oben). Im Test-Modus nicht schreiben — dort laeuft install.php
+     * absichtlich bei jedem Lauf gegen eine frische _test-DB. */
+    if (!defined('MW_TEST_MODE') || !MW_TEST_MODE) {
+        @file_put_contents(__DIR__ . '/.install_complete', date('c') . "\n");
+    }
 
 } catch (PDOException $e) {
     http_response_code(500);

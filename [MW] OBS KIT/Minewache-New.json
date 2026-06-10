@@ -700,7 +700,9 @@
             "settings": {
                 "framerate": 0,
                 "ntp_server": "pool.ntp.org",
-                "ntp_sync_interval": 5
+                "sync_interval": 300,
+                "audio_track": 3,
+                "camera_id": 0
             },
             "mixers": 4,
             "sync": 0,

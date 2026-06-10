@@ -144,6 +144,23 @@ echo -e "${GREEN}[OK] Plugin directory created: ${PLUGIN_DIR}${NC}"
 cp "${BUILD_DIR}/${SO_NAME}" "${BIN_DIR}/"
 echo -e "${GREEN}[OK] Copied: ${SO_NAME} -> ${BIN_DIR}/${NC}"
 
+# libltc is dynamically linked (LGPLv3, SHARED). The plugin .so has an
+# RPATH of $ORIGIN, so libltc.so must sit next to it in bin/64bit or the
+# plugin fails to load. This is the Linux equivalent of install.ps1's
+# libltc.dll copy — without it, OBS silently skips the plugin.
+LIBLTC_FOUND=false
+for libltc in "${BUILD_DIR}"/libltc.so*; do
+    if [ -f "$libltc" ]; then
+        cp -P "$libltc" "${BIN_DIR}/"
+        echo -e "${GREEN}[OK] Copied: $(basename "$libltc") -> ${BIN_DIR}/${NC}"
+        LIBLTC_FOUND=true
+    fi
+done
+if [ "$LIBLTC_FOUND" = false ]; then
+    echo -e "${YELLOW}[WARN] libltc.so not found in ${BUILD_DIR}.${NC}"
+    echo -e "${YELLOW}       The plugin will FAIL to load without it. Rebuild the project.${NC}"
+fi
+
 cp -r "${DATA_DIR}/"* "${DATA_DEST_DIR}/"
 echo -e "${GREEN}[OK] Copied: data/ -> ${DATA_DEST_DIR}/${NC}"
 
@@ -167,6 +184,14 @@ check_file() {
 
 check_file "${BIN_DIR}/${SO_NAME}" "Plugin .so"
 check_file "${DATA_DEST_DIR}/locale/en-US.ini" "Locale file (en-US)"
+
+# Verify libltc landed (glob, since the filename carries a version suffix)
+if compgen -G "${BIN_DIR}/libltc.so*" > /dev/null; then
+    echo -e "  ${GREEN}[OK] libltc shared library present in ${BIN_DIR}${NC}"
+else
+    echo -e "  ${RED}[FAIL] libltc shared library missing — plugin will not load${NC}"
+    ALL_OK=false
+fi
 
 echo ""
 if [ "$ALL_OK" = true ]; then

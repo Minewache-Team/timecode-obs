@@ -1326,6 +1326,70 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
   - [x] New gtest `CameraIDUpperRangeRoundtrip` passes.
 - **Files:** `src/ltc-encoder-wrapper.c/h`, `tests/test-ltc-roundtrip.cpp`.
 
+#### TICKET-065: Linux libltc deployment missing (plugin fails to load)
+- **Status:** `DONE` (0.6.3)
+- **Type:** Bug / Build
+- **Description:** libltc is dynamically linked (SHARED, LGPLv3 — TICKET-024).
+  `install.ps1` copies `libltc.dll` next to the plugin, the Inno Setup
+  installer ships it, but `install.sh` (Linux) never copied `libltc.so` —
+  so a Linux user running the documented install got a plugin that OBS
+  silently fails to load (unresolved `libltc.so`). Two-part fix:
+  1. `install.sh` now copies `libltc.so*` into `bin/64bit` next to the
+     plugin and verifies its presence (fails the install if missing).
+  2. `CMakeLists.txt` sets `INSTALL_RPATH "$ORIGIN"` +
+     `BUILD_WITH_INSTALL_RPATH` on Linux (mirroring the existing macOS
+     `@loader_path/../Frameworks` block) so the loader finds libltc next
+     to the plugin without a system-wide install or `LD_LIBRARY_PATH`.
+- **Files:** `install.sh`, `CMakeLists.txt`.
+
+#### TICKET-066: CI test step could never fail the build
+- **Status:** `DONE` (0.6.3)
+- **Type:** Infrastructure
+- **Description:** The `Run Tests 🧪` step on all three platforms carried
+  `continue-on-error: true` (TICKET-045, intended as a 0.6.0-only measure
+  with a documented "flip to blocking once proven" follow-up). The result:
+  a regression that turns a test red still uploads a green release
+  artifact. Removed `continue-on-error` from all three jobs so ctest
+  failures now block the pipeline. Suites are network-free (parser/mock
+  only), so there is no flake risk.
+- **Files:** `.github/workflows/build-project.yaml`.
+
+#### TICKET-067: Scene collection used a dead settings key
+- **Status:** `DONE` (0.6.3)
+- **Type:** Bug
+- **Description:** The `[MW] OBS KIT` LTC source stored
+  `"ntp_sync_interval": 5`, but the plugin reads the key `sync_interval`
+  (seconds). The configured value was silently ignored (fell back to the
+  300 s default), and `5` would have meant 5 *seconds* — hammering NTP —
+  had the key been right. Renamed to `sync_interval: 300` and added
+  explicit `audio_track: 3` + `camera_id: 0` so the template is
+  self-documenting and matches the plugin's setting keys.
+- **Files:** `[MW] OBS KIT/Minewache-New.json`.
+
+#### TICKET-068: Website — double-escaped scene names + unsafe onclick encoding + open install.php
+- **Status:** `DONE` (0.6.3)
+- **Type:** Bug / Hardening (website)
+- **Description:** Three dashboard issues:
+  1. **Double HTML-encoding.** `scene-save.php` ran `htmlspecialchars()`
+     on `scene_name` *before* storing it, and `scenes.php` escapes again
+     on output. A name like `A&B` was stored as `A&amp;B` and shown as
+     `A&amp;B`. Fix: store raw, escape only on output (now consistent
+     with how `notes` was already handled).
+  2. **Wrong encoding in JS handler.** `scenes.php` built the delete
+     button with `addslashes(htmlspecialchars($scene_name))` — mixing an
+     SQL-escaping helper into a JS-string-in-HTML-attribute context.
+     Replaced with `htmlspecialchars(json_encode(...), ENT_QUOTES)`, the
+     correct two-layer (JS literal + HTML attribute) encoding.
+  3. **`install.php` re-runnable in production.** It executed
+     `CREATE TABLE` / `ALTER TABLE` for any unauthenticated visitor.
+     Added a `.install_complete` marker guard: after a successful run the
+     script refuses further runs until the admin removes the marker (or
+     the file). Exempted under `MW_TEST_MODE` so the PHPUnit bootstrap,
+     which re-applies the schema to a fresh `_test` DB each run, is
+     unaffected.
+- **Files:** `website/scene-save.php`, `website/scenes.php`,
+  `website/install.php`.
+
 #### TICKET-061: Scene form memory + +1 buttons
 - **Status:** `DONE`
 - **Type:** UX improvement (website-only)
@@ -1435,6 +1499,7 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 | Session | Date | Agent | Tickets Worked | Status at End | Notes |
 |---------|------|-------|----------------|---------------|-------|
+| 24 | 2026-06-10 | Claude (Fable) | TICKET-065, 066, 067, 068 (all done) | 0.6.3 ready | Full cross-layer audit follow-up. Plugin/build: (065) install.sh never deployed libltc.so → Linux plugin load failure; now copies + verifies it, and CMakeLists sets `$ORIGIN` RPATH on Linux so the loader resolves libltc next to the plugin (mirrors the macOS Frameworks RPATH). CI: (066) removed `continue-on-error: true` from all three `Run Tests` jobs — the step could never fail the build, so a red test still shipped a green artifact; suites are network-free so no flake risk. Template: (067) the MW scene collection stored `ntp_sync_interval` but the plugin reads `sync_interval`, so the configured value was silently dead (and `5` would've meant 5 s); renamed to `sync_interval: 300`, added explicit `audio_track`/`camera_id`. Website: (068) scene_name was HTML-escaped before DB storage AND on output (double-encoding `A&B`→`A&amp;B`); the delete button used `addslashes(htmlspecialchars())` in a JS-in-attribute context (replaced with `htmlspecialchars(json_encode(),ENT_QUOTES)`); install.php was re-runnable by any visitor (added `.install_complete` marker guard, test-mode exempt). Verified: 4/4 C ctest suites green; PHP lint clean on all touched files; JSON/YAML/bash all parse. Audited but deliberately NOT changed (false positives or out-of-scope): Inno Setup already fails loudly on missing libltc.dll (no skipif on that line); Linux ctest finds libltc via CMake's automatic build-tree RPATH (standalone run confirmed); RecTracks appears twice but legitimately (SimpleOutput + AdvOut are different output modes); time-of-day-derived drop-frame TC is an accepted design tradeoff, not touched to avoid regressions. |
 | 23 | 2026-06-10 | Claude (Fable) | TICKET-063 (done), TICKET-064 (done) | 0.6.3 ready | Root-cause session for the cutter report "offsets got worse after sync" (30 fps shoot). Found + fixed three sync bugs: (1) TICKET-059's between-takes instant offset apply only fired when MW Aufnahme was enabled — `ltc_source_signal_recording_stopped()` sat behind `if (!g_mw.enabled) return;` in `on_frontend_event`, so unconfigured cameras kept stale applied offsets all day while MW cameras snapped correct → relative offsets across the fleet got worse, confirming the field suspicion. Call hoisted above the enabled/consent gates. (2) Recording slew rate was a 1000× math error: 1 ms/frame ≈ 30,000 ppm at 30 fps (Decision Log claimed 25 ppm). Takes that started with a stale offset got a non-linear TC ramp baked in → clips aligned at the sync point drift apart over their duration. Now 1 ms per 40 s of media (true 25 ppm) via frame-counter gating. (3) Sync-loss(≥3)+recovery mid-recording hard-jumped TC inside the file because `!first_sync_done` bypassed the recording check; now gated, and the recovery edge survives until the first idle frame instead of being consumed-and-dropped during recording. Also: TICKET-064 — camera IDs 8–15 (Kamera I–P) were silently never written to LTC user7 (`camera_id <= 7` guard missed in the TICKET-032 expansion); fixed + regression test `CameraIDUpperRangeRoundtrip`. Bonus: unguarded `obs_frontend_recording_active()` in the TICKET-043 block broke `ENABLE_FRONTEND_API=OFF` builds — wrapped in `#ifdef`. Verified: 4/4 standalone ctest suites green (timecode, ntp-offset, ltc-roundtrip incl. new test, mw-helpers); `ltc-source.c`/`mw-recording.c` syntax-clean against system libobs headers with and without frontend API. buildspec bumped to 0.6.3. |
 | 22 | 2026-05-27 | Claude Sonnet 4.6 | TICKET-061 (done), TICKET-062 (done) | Both DONE | Website-only UX polish. TICKET-061: scene modal now persists last-saved season/episode/scene_name in localStorage and pre-fills on reopen; take resets to 1 each time; +1 buttons added next to all three number fields for one-click increment. TICKET-062: "Kameras" column in scenes.php table now shows compact circular letter badges (22 px, tooltip = name) directly in the main row instead of a bare count — directors see who was in each scene without expanding. Expand-on-click detail row with full timestamps unchanged. No backend changes, no schema changes. |
 | 21 | 2026-05-23 | Claude Opus 4.7 (1M) | TICKET-057, TICKET-058, TICKET-059 | 0.6.2 shipped (server + plugin) | Cluster of follow-ups after 0.6.1. TICKET-057 (server-only): handle_start now copies plugin_version from the previous session row into the new one, so the dashboard doesn't show "Plugin V nicht gefunden" for ~30 s between recording start and first heartbeat. TICKET-058 (server-only): `latest_version.php` auto-fetches the latest release from the GitHub API (filtered to Minewache by matching "Minewache" in the release name), 1 h cache, multi-stage fallback. Replaces the previous hardcoded `window.MW_LATEST_PLUGIN_VERSION` so we never again forget to bump it on a release. Smoke-tested locally — returned "0.6.1". TICKET-059 (plugin): new `ltc_source_signal_recording_stopped()` API that sets `ntp_sync_recovered_edge=true` on every LTC source via `obs_enum_sources`, called from the `RECORDING_STOPPED` handler. Fixes the "50 s offset persists across takes" field bug — slewing alone (max 10 ms/frame idle) couldn't bridge a multi-second OS-clock skew in a normal between-takes window, and the existing edge trigger only fired on NTP degrade/recovery or director kick (neither happens for a steadily-wrong PC clock). Callback guards on `first_sync_done` so cold-start cases still use the `initial_sync` path. Build clean on Windows. |
