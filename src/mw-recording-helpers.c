@@ -24,6 +24,69 @@
 #include <stdio.h>
 #include <string.h>
 
+int mw_json_escape_string(char *dst, size_t dstsz, const char *src)
+{
+	if (!dst || dstsz == 0)
+		return -1;
+
+	size_t o = 0;
+	dst[0] = '\0';
+	if (!src)
+		return 0;
+
+	for (const unsigned char *p = (const unsigned char *)src; *p; p++) {
+		char tmp[8];
+		const char *rep;
+		size_t replen;
+
+		switch (*p) {
+		case '"':
+			rep = "\\\"";
+			replen = 2;
+			break;
+		case '\\':
+			rep = "\\\\";
+			replen = 2;
+			break;
+		case '\n':
+			rep = "\\n";
+			replen = 2;
+			break;
+		case '\r':
+			rep = "\\r";
+			replen = 2;
+			break;
+		case '\t':
+			rep = "\\t";
+			replen = 2;
+			break;
+		default:
+			if (*p < 0x20) {
+				snprintf(tmp, sizeof(tmp), "\\u%04x",
+					 (unsigned)*p);
+				rep = tmp;
+				replen = 6;
+			} else {
+				tmp[0] = (char)*p;
+				tmp[1] = '\0';
+				rep = tmp;
+				replen = 1;
+			}
+			break;
+		}
+
+		if (o + replen + 1 > dstsz) {
+			dst[o] = '\0';
+			return -1;
+		}
+		memcpy(dst + o, rep, replen);
+		o += replen;
+	}
+
+	dst[o] = '\0';
+	return (int)o;
+}
+
 int mw_build_heartbeat_body(char *buf, size_t bufsz,
 			    const char *name,
 			    bool recording_active,
@@ -38,8 +101,13 @@ int mw_build_heartbeat_body(char *buf, size_t bufsz,
 {
 	if (!buf || bufsz == 0)
 		return -1;
-	if (!name)
-		name = "";
+
+	/* Escape the user-controlled display name — one quote in it must not
+	 * invalidate the whole heartbeat (the server 400s broken JSON before
+	 * its own name sanitization ever runs). */
+	char esc_name[320];
+	if (mw_json_escape_string(esc_name, sizeof(esc_name), name) < 0)
+		return -1;
 
 	bool have_version = (plugin_version != NULL && plugin_version[0] != '\0');
 	const char *sync_lost_str = sync_lost_in_session ? "true" : "false";
@@ -49,7 +117,7 @@ int mw_build_heartbeat_body(char *buf, size_t bufsz,
 	 * earlier collapsed into one path. */
 	int n = snprintf(buf, bufsz,
 			 "{\"name\":\"%s\",\"recording_active\":%s",
-			 name,
+			 esc_name,
 			 recording_active ? "true" : "false");
 	if (n < 0)
 		return -1;

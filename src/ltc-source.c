@@ -64,9 +64,13 @@
  * minimum-RTT one, and stop early once a sample is below
  * NTP_RTT_GOOD_MS. A sample above NTP_RTT_HARD_MAX_MS is discarded
  * outright. If no server in the chain yields a good sample, the best
- * acceptable one across the whole chain is still used (a mediocre NTP
- * measurement beats the HTTP Date fallback and beats free-running by a
- * mile — think LTE hotspot on a remote shoot). */
+ * acceptable one across the whole chain is still used: on a German
+ * residential line under evening load (DOCSIS upstream congestion, DSL
+ * bufferbloat during any household upload) ALL servers can sit above the
+ * GOOD threshold for minutes — a mediocre NTP measurement still beats
+ * the HTTP Date fallback (~1 s granularity) and beats free-running by a
+ * mile. The follow-up cycle is shortened in that case to catch the next
+ * quiet moment on the line. */
 #define NTP_SAMPLES_PER_SERVER 3
 #define NTP_SAMPLE_GAP_MS 250 /* decorrelates bufferbloat spikes */
 #define NTP_RTT_GOOD_MS 150
@@ -152,7 +156,10 @@ struct ltc_source_context {
 	volatile bool ntp_synced;
 	volatile int64_t ntp_roundtrip_ms;
 	volatile sync_method_t sync_method;
-	bool first_sync_done;
+	/* Written by the NTP thread, read by the video thread
+	 * (encode_next_frame) and the frontend-event path
+	 * (signal_recording_stopped) — must not be cached in a register. */
+	volatile bool first_sync_done;
 
 	/* Degradation tracking (NTP thread only) */
 	int consecutive_sync_failures;
@@ -458,6 +465,16 @@ static void *ntp_sync_thread(void *data)
 			phase_sec = 10;
 		else
 			phase_sec = (unsigned long)ctx->sync_interval_sec;
+
+		/* A cycle that only produced a mediocre sample (RTT above
+		 * GOOD — typical for a loaded residential line in the
+		 * evening) re-measures after at most 60 s instead of waiting
+		 * the full interval: quiet moments on such a line come and
+		 * go within minutes, and the next measurement replaces the
+		 * noisy target (slewing absorbs the difference). */
+		if (success && result.roundtrip_ms > NTP_RTT_GOOD_MS &&
+		    phase_sec > 60)
+			phase_sec = 60;
 		unsigned long total_ms = phase_sec * 1000UL;
 		unsigned long elapsed_ms = 0;
 		cycle_kicked_by_resync = false;
@@ -490,11 +507,20 @@ static void start_ntp_thread(struct ltc_source_context *ctx)
 	if (ctx->thread_created)
 		return;
 
-	if (os_event_init(&ctx->stop_event, OS_EVENT_TYPE_MANUAL) != 0)
+	/* Every failure below means the timecode silently free-runs on the
+	 * local clock for the whole session — that must never be quiet. */
+	if (os_event_init(&ctx->stop_event, OS_EVENT_TYPE_MANUAL) != 0) {
+		obs_log(LOG_ERROR,
+			"Failed to create NTP stop event — timecode will "
+			"free-run on the LOCAL clock (no sync)!");
 		return;
+	}
 	if (os_event_init(&ctx->resync_event, OS_EVENT_TYPE_AUTO) != 0) {
 		os_event_destroy(ctx->stop_event);
 		ctx->stop_event = NULL;
+		obs_log(LOG_ERROR,
+			"Failed to create NTP resync event — timecode will "
+			"free-run on the LOCAL clock (no sync)!");
 		return;
 	}
 
@@ -505,6 +531,9 @@ static void start_ntp_thread(struct ltc_source_context *ctx)
 		os_event_destroy(ctx->resync_event);
 		ctx->stop_event = NULL;
 		ctx->resync_event = NULL;
+		obs_log(LOG_ERROR,
+			"Failed to start NTP sync thread — timecode will "
+			"free-run on the LOCAL clock (no sync)!");
 	}
 }
 
@@ -642,6 +671,15 @@ static const char *fps_label_str(tc_framerate_t fps)
 static void create_encoder(struct ltc_source_context *ctx)
 {
 	ctx->encoder = ltc_wrapper_create(SAMPLE_RATE, ctx->framerate);
+	if (!ctx->encoder) {
+		/* Without the encoder the source outputs pure silence — that
+		 * must never happen quietly, the cutter only finds out weeks
+		 * later in the edit. */
+		obs_log(LOG_ERROR,
+			"LTC encoder creation FAILED (fps enum %d) — source "
+			"will output silence, no timecode will be recorded!",
+			(int)ctx->framerate);
+	}
 	ctx->nominal_fps = fps_nominal(ctx->framerate);
 	ctx->frame_valid = false;
 	ctx->frame_pos = 0;

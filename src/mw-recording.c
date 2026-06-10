@@ -247,8 +247,17 @@ static bool mw_http_post(const char *base_url, const char *url_suffix,
 	if (!base_url || !base_url[0])
 		return false;
 
+	/* Tolerate a trailing slash in the configured server URL — operators
+	 * paste "https://example.com/" and "...//api.php" depends on server
+	 * rewrite rules to work. */
+	char base[512];
+	snprintf(base, sizeof(base), "%s", base_url);
+	size_t blen = strlen(base);
+	while (blen > 0 && base[blen - 1] == '/')
+		base[--blen] = '\0';
+
 	char url[1024];
-	snprintf(url, sizeof(url), "%s/api.php%s", base_url, url_suffix);
+	snprintf(url, sizeof(url), "%s/api.php%s", base, url_suffix);
 
 	CURL *curl = curl_easy_init();
 	if (!curl)
@@ -342,13 +351,21 @@ static void *heartbeat_thread_func(void *data)
 				&raw_offset_ms, &offset_age_sec,
 				&sync_lost_in_session);
 
-			char body[512];
-			mw_build_heartbeat_body(body, sizeof(body), name,
-						active, have_offset, offset_ms,
-						sync_method, synced,
-						raw_offset_ms, offset_age_sec,
-						PLUGIN_VERSION,
-						sync_lost_in_session);
+			char body[1024];
+			int blen = mw_build_heartbeat_body(
+				body, sizeof(body), name, active, have_offset,
+				offset_ms, sync_method, synced, raw_offset_ms,
+				offset_age_sec, PLUGIN_VERSION,
+				sync_lost_in_session);
+			if (blen < 0) {
+				/* Never POST a truncated body — the server
+				 * would reject it anyway, and a partial JSON
+				 * string could mislead debugging. */
+				obs_log(LOG_WARNING,
+					"MW heartbeat body build failed "
+					"(display name too long?) — skipping tick");
+				goto sleep_tick;
+			}
 
 			char response[512] = {0};
 			bool ok = mw_http_post(server, "?action=heartbeat",
@@ -400,6 +417,7 @@ static void *heartbeat_thread_func(void *data)
 			}
 		}
 
+sleep_tick:;
 		/* Sleep up to 30s but wake on stop_event in 500ms chunks. */
 		unsigned long total_ms =
 			(unsigned long)MW_HEARTBEAT_INTERVAL_SEC * 1000UL;
@@ -422,14 +440,21 @@ static void start_heartbeat_thread(void)
 	if (g_mw.thread_created)
 		return;
 
-	if (os_event_init(&g_mw.stop_event, OS_EVENT_TYPE_MANUAL) != 0)
+	if (os_event_init(&g_mw.stop_event, OS_EVENT_TYPE_MANUAL) != 0) {
+		obs_log(LOG_ERROR,
+			"MW heartbeat: stop event creation failed — no status "
+			"will be reported to the dashboard");
 		return;
+	}
 
 	if (pthread_create(&g_mw.heartbeat_thread, NULL, heartbeat_thread_func, NULL) == 0) {
 		g_mw.thread_created = true;
 	} else {
 		os_event_destroy(g_mw.stop_event);
 		g_mw.stop_event = NULL;
+		obs_log(LOG_ERROR,
+			"MW heartbeat: thread creation failed — no status "
+			"will be reported to the dashboard");
 	}
 }
 
@@ -464,8 +489,14 @@ static void mw_send_start(void)
 		return;
 	}
 
+	char esc_name[320];
+	if (mw_json_escape_string(esc_name, sizeof(esc_name), name) < 0) {
+		obs_log(LOG_WARNING, "MW recording: name not encodable, start signal skipped");
+		return;
+	}
+
 	char body[512];
-	snprintf(body, sizeof(body), "{\"name\":\"%s\",\"camera_id\":\"%c\"}", name, 'A' + cam);
+	snprintf(body, sizeof(body), "{\"name\":\"%s\",\"camera_id\":\"%c\"}", esc_name, 'A' + cam);
 	mw_http_post(server, "?action=start", key, body, NULL, 0);
 	obs_log(LOG_INFO, "MW recording started: '%s' camera %c", name, 'A' + cam);
 }
@@ -485,8 +516,12 @@ static void mw_send_stop(void)
 	if (!server[0] || !name[0])
 		return;
 
+	char esc_name[320];
+	if (mw_json_escape_string(esc_name, sizeof(esc_name), name) < 0)
+		return;
+
 	char body[512];
-	snprintf(body, sizeof(body), "{\"name\":\"%s\",\"camera_id\":\"%c\"}", name, 'A' + cam);
+	snprintf(body, sizeof(body), "{\"name\":\"%s\",\"camera_id\":\"%c\"}", esc_name, 'A' + cam);
 	mw_http_post(server, "?action=stop", key, body, NULL, 0);
 	obs_log(LOG_INFO, "MW recording stopped: '%s' camera %c", name, 'A' + cam);
 }
@@ -529,9 +564,30 @@ static wchar_t *utf8_to_wide(const char *utf8)
 	if (!utf8 || !utf8[0])
 		return _wcsdup(L"");
 	int len = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
-	wchar_t *w = malloc(len * sizeof(wchar_t));
-	MultiByteToWideChar(CP_UTF8, 0, utf8, -1, w, len);
+	if (len <= 0)
+		return _wcsdup(L"");
+	wchar_t *w = malloc((size_t)len * sizeof(wchar_t));
+	if (!w)
+		return _wcsdup(L"");
+	if (MultiByteToWideChar(CP_UTF8, 0, utf8, -1, w, len) == 0)
+		w[0] = 0;
 	return w;
+}
+
+/* Read a dialog field and convert to UTF-8 into a fixed buffer. On
+ * conversion failure (e.g. the UTF-8 encoding doesn't fit `outsz` — wide
+ * count alone doesn't bound the byte count with umlauts) the buffer is
+ * left as a valid empty string rather than undefined, possibly
+ * unterminated garbage that later snprintf("%s") calls would read past. */
+static void read_dlg_utf8(HWND hwnd, int ctl_id, char *out, size_t outsz)
+{
+	wchar_t wbuf[512];
+	GetDlgItemTextW(hwnd, ctl_id, wbuf, 512);
+	int n = WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, out, (int)outsz,
+				    NULL, NULL);
+	if (n <= 0)
+		out[0] = '\0';
+	out[outsz - 1] = '\0';
 }
 
 /* Dark theme color handler — call from WM_CTLCOLORSTATIC / WM_CTLCOLOREDIT etc. */
@@ -917,20 +973,14 @@ static LRESULT CALLBACK settings_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LP
 
 	case WM_COMMAND:
 		if (LOWORD(wParam) == IDC_SAVE) {
-			wchar_t wbuf[512];
-
 			pthread_mutex_lock(&g_mw.mutex);
 
-			GetDlgItemTextW(hwnd, IDC_SERVER_URL, wbuf, 512);
-			WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, g_mw.server_url, sizeof(g_mw.server_url), NULL,
-					    NULL);
-
-			GetDlgItemTextW(hwnd, IDC_USER_NAME, wbuf, 100);
-			WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, g_mw.user_name, sizeof(g_mw.user_name), NULL,
-					    NULL);
-
-			GetDlgItemTextW(hwnd, IDC_API_KEY, wbuf, 256);
-			WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, g_mw.api_key, sizeof(g_mw.api_key), NULL, NULL);
+			read_dlg_utf8(hwnd, IDC_SERVER_URL, g_mw.server_url,
+				      sizeof(g_mw.server_url));
+			read_dlg_utf8(hwnd, IDC_USER_NAME, g_mw.user_name,
+				      sizeof(g_mw.user_name));
+			read_dlg_utf8(hwnd, IDC_API_KEY, g_mw.api_key,
+				      sizeof(g_mw.api_key));
 
 			int new_cam = (int)SendDlgItemMessageW(hwnd, IDC_CAMERA_ID, CB_GETCURSEL, 0, 0);
 			if (new_cam < 0) new_cam = 0;
@@ -1031,9 +1081,13 @@ static bool ensure_consent(void)
 		g_mw.consent_version = MW_CURRENT_CONSENT_VERSION;
 		save_config();
 
-		char body[512];
-		snprintf(body, sizeof(body), "{\"name\":\"%s\",\"consent\":true}", name);
-		mw_http_post(server, "?action=consent", key, body, NULL, 0);
+		char esc_name[320];
+		if (mw_json_escape_string(esc_name, sizeof(esc_name), name) >= 0) {
+			char body[512];
+			snprintf(body, sizeof(body),
+				 "{\"name\":\"%s\",\"consent\":true}", esc_name);
+			mw_http_post(server, "?action=consent", key, body, NULL, 0);
+		}
 
 		obs_log(LOG_INFO, "MW recording: user '%s' gave consent (v%d)",
 			name, MW_CURRENT_CONSENT_VERSION);

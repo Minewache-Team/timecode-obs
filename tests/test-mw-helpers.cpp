@@ -20,6 +20,70 @@ extern "C" {
 #include <string>
 
 /* =================================================================
+ * mw_json_escape_string — user strings must never break the JSON body
+ * ================================================================= */
+
+TEST(JsonEscapeString, PlainStringPassesThrough)
+{
+	char buf[64];
+	EXPECT_EQ(mw_json_escape_string(buf, sizeof(buf), "Kamera Anna_3"), 13);
+	EXPECT_STREQ(buf, "Kamera Anna_3");
+}
+
+TEST(JsonEscapeString, QuotesAndBackslashesEscaped)
+{
+	char buf[64];
+	ASSERT_GT(mw_json_escape_string(buf, sizeof(buf), "Max \"Maxi\" M\\W"), 0);
+	EXPECT_STREQ(buf, "Max \\\"Maxi\\\" M\\\\W");
+}
+
+TEST(JsonEscapeString, ControlCharactersEscaped)
+{
+	char buf[64];
+	ASSERT_GT(mw_json_escape_string(buf, sizeof(buf), "a\nb\tc\x01"), 0);
+	EXPECT_STREQ(buf, "a\\nb\\tc\\u0001");
+}
+
+TEST(JsonEscapeString, Utf8PassesThroughUnchanged)
+{
+	char buf[64];
+	ASSERT_GT(mw_json_escape_string(buf, sizeof(buf), "K\xc3\xa4the \xe2\x80\x94 B"), 0);
+	EXPECT_STREQ(buf, "K\xc3\xa4the \xe2\x80\x94 B");
+}
+
+TEST(JsonEscapeString, NullSourceIsEmptyString)
+{
+	char buf[8];
+	EXPECT_EQ(mw_json_escape_string(buf, sizeof(buf), nullptr), 0);
+	EXPECT_STREQ(buf, "");
+}
+
+TEST(JsonEscapeString, TruncationReturnsMinusOneButTerminates)
+{
+	char buf[4];
+	EXPECT_EQ(mw_json_escape_string(buf, sizeof(buf), "abcdef"), -1);
+	EXPECT_EQ(buf[3], '\0'); /* still a valid C string */
+	EXPECT_EQ(mw_json_escape_string(nullptr, 0, "x"), -1);
+}
+
+TEST(BuildHeartbeatBody, QuoteInNameProducesValidEscapedJson)
+{
+	/* The field bug this guards: a display name with a quote made the
+	 * whole heartbeat invalid JSON — the server 400'd it before its
+	 * name sanitization ran, and the camera silently vanished from the
+	 * dashboard. */
+	char buf[1024];
+	int n = mw_build_heartbeat_body(buf, sizeof(buf), "Max \"Maxi\" M",
+					true, false, 0, 0, false, 0, -1,
+					nullptr, false);
+	ASSERT_GT(n, 0);
+	std::string s(buf);
+	EXPECT_NE(s.find("\"name\":\"Max \\\"Maxi\\\" M\""), std::string::npos);
+	/* The unescaped inner quote must not appear anywhere. */
+	EXPECT_EQ(s.find("\"Maxi\""), std::string::npos);
+}
+
+/* =================================================================
  * mw_build_heartbeat_body — JSON shape with offset present
  * ================================================================= */
 
