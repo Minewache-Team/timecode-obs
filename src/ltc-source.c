@@ -542,6 +542,30 @@ static int fps_nominal(tc_framerate_t fps)
 	}
 }
 
+/* Human-readable framerate label for the metadata sidecar. Distinct from
+ * fps_nominal() because 29.97 drop-frame must NOT be reported as "30" — the
+ * 29.97-vs-30 mismatch is a classic cause of multi-camera sync failure in
+ * DaVinci Resolve, and the sidecar is the audit trail meant to catch it. */
+static const char *fps_label_str(tc_framerate_t fps)
+{
+	switch (fps) {
+	case TC_FPS_24:
+		return "24";
+	case TC_FPS_25:
+		return "25";
+	case TC_FPS_29_97_DF:
+		return "29.97";
+	case TC_FPS_30:
+		return "30";
+	case TC_FPS_50:
+		return "50";
+	case TC_FPS_60:
+		return "60";
+	default:
+		return "25";
+	}
+}
+
 /* ---- Encoder lifecycle ---- */
 
 static void create_encoder(struct ltc_source_context *ctx)
@@ -925,12 +949,9 @@ static void ltc_source_update(void *data, obs_data_t *settings)
 		default:
 			break;
 		}
-		char fps_label[16];
-		snprintf(fps_label, sizeof(fps_label), "%d",
-			 ctx->nominal_fps);
 		metadata_writer_set_info(ctx->metadata, ctx->camera_id,
-					fps_label, ctx->ntp_server,
-					ctx->ntp_synced,
+					fps_label_str(ctx->framerate),
+					ctx->ntp_server, ctx->ntp_synced,
 					ctx->ntp_last_raw_offset_ms, sync_str);
 	}
 #endif
@@ -1025,11 +1046,33 @@ static obs_properties_t *ltc_source_get_properties(void *data)
 					OBS_TEXT_INFO);
 	}
 
-	/* NTP status (informational) */
-	obs_properties_add_text(props, "_ntp_status",
-				obs_module_text("NTPStatus"), OBS_TEXT_INFO);
+	/* NTP status — live snapshot. OBS rebuilds the properties each time the
+	 * dialog is opened, so this reflects the sync state at open time. The
+	 * old code passed the static "NTP Status" label here, so the actual
+	 * sync result was never shown to the operator. */
+	if (ctx) {
+		char status_buf[160];
+		int off = (int)ctx->ntp_last_raw_offset_ms;
+		if (!ctx->ntp_synced)
+			snprintf(status_buf, sizeof(status_buf), "%s",
+				 obs_module_text("NTPNotSynced"));
+		else if (ctx->sync_method == SYNC_METHOD_HTTP)
+			snprintf(status_buf, sizeof(status_buf),
+				 obs_module_text("HTTPSynced"), off);
+		else
+			snprintf(status_buf, sizeof(status_buf),
+				 obs_module_text("NTPSynced"), off);
+		obs_properties_add_text(props, "_ntp_status", status_buf,
+					OBS_TEXT_INFO);
+	} else {
+		obs_properties_add_text(props, "_ntp_status",
+					obs_module_text("NTPStatus"),
+					OBS_TEXT_INFO);
+	}
 
-	/* Current timecode display */
+	/* Current timecode — live snapshot. The old code computed the string
+	 * into tc_buf and then threw it away, displaying only the static
+	 * "Current Timecode" label. */
 	if (ctx) {
 		int64_t sec, usec;
 		ntp_corrected_time(ctx->ntp_offset_ms_applied, &sec, &usec);
@@ -1037,10 +1080,17 @@ static obs_properties_t *ltc_source_get_properties(void *data)
 		char tc_buf[16];
 		timecode_from_unix(sec, usec, ctx->framerate, &tc);
 		timecode_to_string(&tc, tc_buf, sizeof(tc_buf));
-	}
 
-	obs_properties_add_text(props, "_timecode",
-				obs_module_text("CurrentTimecode"), OBS_TEXT_INFO);
+		char tc_label[64];
+		snprintf(tc_label, sizeof(tc_label), "%s: %s",
+			 obs_module_text("CurrentTimecode"), tc_buf);
+		obs_properties_add_text(props, "_timecode", tc_label,
+					OBS_TEXT_INFO);
+	} else {
+		obs_properties_add_text(props, "_timecode",
+					obs_module_text("CurrentTimecode"),
+					OBS_TEXT_INFO);
+	}
 
 	return props;
 }

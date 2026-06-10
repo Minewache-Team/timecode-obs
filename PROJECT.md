@@ -1390,6 +1390,35 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 - **Files:** `website/scene-save.php`, `website/scenes.php`,
   `website/install.php`.
 
+#### TICKET-069: Non-functional Properties status display + stale/mislabelled sidecar metadata
+- **Status:** `DONE` (0.6.3)
+- **Type:** Bug (functional, non-security)
+- **Description:** Audit of the user-facing data paths turned up three
+  things that looked implemented but weren't:
+  1. **Properties status/timecode were never shown.** `get_properties`
+     passed the static labels `obs_module_text("NTPStatus")` /
+     `"CurrentTimecode"` as the info-text, so the operator saw the words
+     "NTP Status" and "Current Timecode" instead of the actual sync state
+     and running timecode. The timecode string was even computed into
+     `tc_buf` and then discarded. Now both render live snapshots (rebuilt
+     each time the dialog opens), wiring up the previously-dead locale keys
+     `NTPSynced` / `HTTPSynced` / `NTPNotSynced`.
+  2. **Sidecar sync fields were always stale.** `metadata_writer_set_info`
+     only runs on a settings change, so the `.ltc.json` reported the
+     create-time values (`ntp_synced=false`, `ntp_offset_ms=0`) for every
+     recording regardless of the real sync state — useless as the audit
+     trail TICKET-019 intended. `write_sidecar_end` now refreshes those
+     fields from the live source via `ltc_source_get_current_offset()`.
+  3. **Sidecar framerate mislabelled 29.97 as "30".** It wrote
+     `nominal_fps` ("30") for drop-frame — the exact 29.97-vs-30 mixup
+     that breaks DaVinci Resolve multi-cam sync. New `fps_label_str()`
+     reports "29.97" for `TC_FPS_29_97_DF`.
+  Also removed dead code: the unused `write_sidecar_start()` function and
+  the no-op `obs_frontend_get_current_record_output_path()` fetch in the
+  RECORDING_STARTED handler (the final filename is only known at stop, so
+  the complete sidecar is written in one shot then).
+- **Files:** `src/ltc-source.c`, `src/metadata-writer.c`.
+
 #### TICKET-061: Scene form memory + +1 buttons
 - **Status:** `DONE`
 - **Type:** UX improvement (website-only)
@@ -1499,6 +1528,7 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 | Session | Date | Agent | Tickets Worked | Status at End | Notes |
 |---------|------|-------|----------------|---------------|-------|
+| 25 | 2026-06-10 | Claude (Fable) | TICKET-069 (done) | 0.6.3 ready | Non-security functional cleanup pass. (1) Properties UI: the NTP-status and current-timecode info lines showed only their static labels — the actual values were never rendered (the timecode was even computed and thrown away). Both now show live snapshots, finally using the dead `NTPSynced`/`HTTPSynced`/`NTPNotSynced` locale keys. (2) Metadata sidecar reported create-time sync values (`ntp_synced=false`, `offset=0`) for every recording because `set_info` only runs on settings changes; `write_sidecar_end` now pulls live state via `ltc_source_get_current_offset()`. (3) Sidecar framerate wrote "30" for 29.97df — the classic mixup that breaks Resolve sync; added `fps_label_str()` returning "29.97". Removed dead `write_sidecar_start()` + the no-op record-path fetch in the STARTED handler. Verified: compiles clean with `-Wall -Wextra -Werror` both with and without `ENABLE_FRONTEND_API`; 4/4 ctest suites green. |
 | 24 | 2026-06-10 | Claude (Fable) | TICKET-065, 066, 067, 068 (all done) | 0.6.3 ready | Full cross-layer audit follow-up. Plugin/build: (065) install.sh never deployed libltc.so → Linux plugin load failure; now copies + verifies it, and CMakeLists sets `$ORIGIN` RPATH on Linux so the loader resolves libltc next to the plugin (mirrors the macOS Frameworks RPATH). CI: (066) removed `continue-on-error: true` from all three `Run Tests` jobs — the step could never fail the build, so a red test still shipped a green artifact; suites are network-free so no flake risk. Template: (067) the MW scene collection stored `ntp_sync_interval` but the plugin reads `sync_interval`, so the configured value was silently dead (and `5` would've meant 5 s); renamed to `sync_interval: 300`, added explicit `audio_track`/`camera_id`. Website: (068) scene_name was HTML-escaped before DB storage AND on output (double-encoding `A&B`→`A&amp;B`); the delete button used `addslashes(htmlspecialchars())` in a JS-in-attribute context (replaced with `htmlspecialchars(json_encode(),ENT_QUOTES)`); install.php was re-runnable by any visitor (added `.install_complete` marker guard, test-mode exempt). Verified: 4/4 C ctest suites green; PHP lint clean on all touched files; JSON/YAML/bash all parse. Audited but deliberately NOT changed (false positives or out-of-scope): Inno Setup already fails loudly on missing libltc.dll (no skipif on that line); Linux ctest finds libltc via CMake's automatic build-tree RPATH (standalone run confirmed); RecTracks appears twice but legitimately (SimpleOutput + AdvOut are different output modes); time-of-day-derived drop-frame TC is an accepted design tradeoff, not touched to avoid regressions. |
 | 23 | 2026-06-10 | Claude (Fable) | TICKET-063 (done), TICKET-064 (done) | 0.6.3 ready | Root-cause session for the cutter report "offsets got worse after sync" (30 fps shoot). Found + fixed three sync bugs: (1) TICKET-059's between-takes instant offset apply only fired when MW Aufnahme was enabled — `ltc_source_signal_recording_stopped()` sat behind `if (!g_mw.enabled) return;` in `on_frontend_event`, so unconfigured cameras kept stale applied offsets all day while MW cameras snapped correct → relative offsets across the fleet got worse, confirming the field suspicion. Call hoisted above the enabled/consent gates. (2) Recording slew rate was a 1000× math error: 1 ms/frame ≈ 30,000 ppm at 30 fps (Decision Log claimed 25 ppm). Takes that started with a stale offset got a non-linear TC ramp baked in → clips aligned at the sync point drift apart over their duration. Now 1 ms per 40 s of media (true 25 ppm) via frame-counter gating. (3) Sync-loss(≥3)+recovery mid-recording hard-jumped TC inside the file because `!first_sync_done` bypassed the recording check; now gated, and the recovery edge survives until the first idle frame instead of being consumed-and-dropped during recording. Also: TICKET-064 — camera IDs 8–15 (Kamera I–P) were silently never written to LTC user7 (`camera_id <= 7` guard missed in the TICKET-032 expansion); fixed + regression test `CameraIDUpperRangeRoundtrip`. Bonus: unguarded `obs_frontend_recording_active()` in the TICKET-043 block broke `ENABLE_FRONTEND_API=OFF` builds — wrapped in `#ifdef`. Verified: 4/4 standalone ctest suites green (timecode, ntp-offset, ltc-roundtrip incl. new test, mw-helpers); `ltc-source.c`/`mw-recording.c` syntax-clean against system libobs headers with and without frontend API. buildspec bumped to 0.6.3. |
 | 22 | 2026-05-27 | Claude Sonnet 4.6 | TICKET-061 (done), TICKET-062 (done) | Both DONE | Website-only UX polish. TICKET-061: scene modal now persists last-saved season/episode/scene_name in localStorage and pre-fills on reopen; take resets to 1 each time; +1 buttons added next to all three number fields for one-click increment. TICKET-062: "Kameras" column in scenes.php table now shows compact circular letter badges (22 px, tooltip = name) directly in the main row instead of a bare count — directors see who was in each scene without expanding. Expand-on-click detail row with full timestamps unchanged. No backend changes, no schema changes. |
