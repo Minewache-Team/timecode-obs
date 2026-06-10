@@ -236,13 +236,25 @@ static size_t capture_write(char *ptr, size_t size, size_t nmemb, void *userdata
 	return bytes;
 }
 
+/* Timeouts for shared family lines: under household load (someone
+ * streaming/uploading) TCP+TLS setup alone can take several seconds. A
+ * too-tight timeout turns line congestion into missed heartbeats, and the
+ * camera flaps "offline" on the dashboard while actually recording fine.
+ * The generous value is only safe on the heartbeat THREAD — start/stop/
+ * consent run on the OBS frontend (UI) thread, where every blocked second
+ * is a frozen UI, so they keep the shorter budget. */
+#define MW_HTTP_TIMEOUT_THREAD_MS 10000L
+#define MW_HTTP_TIMEOUT_UI_MS 5000L
+
 /*
  * POST to the MW API. If response_out is non-NULL, captures up to response_max-1
  * bytes of the response body (null-terminated). Pass NULL/0 to discard.
+ * timeout_ms: total transfer budget (connect phase gets half of it).
  */
 static bool mw_http_post(const char *base_url, const char *url_suffix,
 			 const char *api_key, const char *json_body,
-			 char *response_out, size_t response_max)
+			 char *response_out, size_t response_max,
+			 long timeout_ms)
 {
 	if (!base_url || !base_url[0])
 		return false;
@@ -288,8 +300,8 @@ static bool mw_http_post(const char *base_url, const char *url_suffix,
 	} else {
 		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, discard_write);
 	}
-	curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 5000L);
-	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 3000L);
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout_ms);
+	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, timeout_ms / 2);
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
 
@@ -370,7 +382,8 @@ static void *heartbeat_thread_func(void *data)
 			char response[512] = {0};
 			bool ok = mw_http_post(server, "?action=heartbeat",
 					       key, body, response,
-					       sizeof(response));
+					       sizeof(response),
+					       MW_HTTP_TIMEOUT_THREAD_MS);
 
 			if (ok && have_offset) {
 				obs_log(LOG_DEBUG,
@@ -497,7 +510,8 @@ static void mw_send_start(void)
 
 	char body[512];
 	snprintf(body, sizeof(body), "{\"name\":\"%s\",\"camera_id\":\"%c\"}", esc_name, 'A' + cam);
-	mw_http_post(server, "?action=start", key, body, NULL, 0);
+	mw_http_post(server, "?action=start", key, body, NULL, 0,
+		     MW_HTTP_TIMEOUT_UI_MS);
 	obs_log(LOG_INFO, "MW recording started: '%s' camera %c", name, 'A' + cam);
 }
 
@@ -522,7 +536,8 @@ static void mw_send_stop(void)
 
 	char body[512];
 	snprintf(body, sizeof(body), "{\"name\":\"%s\",\"camera_id\":\"%c\"}", esc_name, 'A' + cam);
-	mw_http_post(server, "?action=stop", key, body, NULL, 0);
+	mw_http_post(server, "?action=stop", key, body, NULL, 0,
+		     MW_HTTP_TIMEOUT_UI_MS);
 	obs_log(LOG_INFO, "MW recording stopped: '%s' camera %c", name, 'A' + cam);
 }
 
@@ -1086,7 +1101,8 @@ static bool ensure_consent(void)
 			char body[512];
 			snprintf(body, sizeof(body),
 				 "{\"name\":\"%s\",\"consent\":true}", esc_name);
-			mw_http_post(server, "?action=consent", key, body, NULL, 0);
+			mw_http_post(server, "?action=consent", key, body,
+				     NULL, 0, MW_HTTP_TIMEOUT_UI_MS);
 		}
 
 		obs_log(LOG_INFO, "MW recording: user '%s' gave consent (v%d)",

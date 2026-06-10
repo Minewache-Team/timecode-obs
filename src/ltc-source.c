@@ -56,23 +56,32 @@
 #define HTTP_FALLBACK_URL "https://www.google.com"
 #define HTTP_FALLBACK_TIMEOUT_MS 5000
 
-/* Network-quality gates for NTP samples (TICKET-071). The cameras sit on
- * decentralized consumer connections all over Germany; a single SNTP
- * sample's offset error is bounded by ±RTT/2, and bufferbloat on a busy
- * home uplink inflates the RTT (and thus the error) by whole seconds.
- * Per server we take up to NTP_SAMPLES_PER_SERVER measurements, keep the
- * minimum-RTT one, and stop early once a sample is below
+/* Network-quality gates for NTP samples (TICKET-071/073). The cameras sit
+ * on decentralized FAMILY internet connections all over Germany; a single
+ * SNTP sample's offset error is bounded by ±RTT/2, and these lines are
+ * shared: someone else's Netflix stream congests the downlink (delays the
+ * NTP *response*), an upload/backup congests the uplink (delays the
+ * request) — both inflate the RTT and thus the error bound by whole
+ * seconds. Per server we take up to NTP_SAMPLES_PER_SERVER measurements,
+ * keep the minimum-RTT one, and stop early once a sample is below
  * NTP_RTT_GOOD_MS. A sample above NTP_RTT_HARD_MAX_MS is discarded
  * outright. If no server in the chain yields a good sample, the best
- * acceptable one across the whole chain is still used: on a German
- * residential line under evening load (DOCSIS upstream congestion, DSL
- * bufferbloat during any household upload) ALL servers can sit above the
- * GOOD threshold for minutes — a mediocre NTP measurement still beats
- * the HTTP Date fallback (~1 s granularity) and beats free-running by a
- * mile. The follow-up cycle is shortened in that case to catch the next
- * quiet moment on the line. */
+ * acceptable one across the whole chain is still used: under sustained
+ * household load ALL servers can sit above the GOOD threshold for minutes
+ * — a mediocre NTP measurement still beats the HTTP Date fallback (~1 s
+ * granularity) and beats free-running by a mile. The follow-up cycle is
+ * shortened in that case to catch the next quiet moment on the line.
+ *
+ * The gap between samples is tuned to streaming behaviour: ABR players
+ * (Netflix/YouTube/Twitch) don't stream continuously, they burst one
+ * segment every few seconds at full line rate and idle in between.
+ * Samples 250 ms apart would all land inside the same burst (or the same
+ * idle gap); spreading three samples over ~4.5 s makes it likely that at
+ * least one falls into a burst pause and measures the real path. The gap
+ * only costs time when quality is already bad — a GOOD first sample
+ * exits immediately. */
 #define NTP_SAMPLES_PER_SERVER 3
-#define NTP_SAMPLE_GAP_MS 250 /* decorrelates bufferbloat spikes */
+#define NTP_SAMPLE_GAP_MS 2000
 #define NTP_RTT_GOOD_MS 150
 #define NTP_RTT_HARD_MAX_MS 3000
 
@@ -316,8 +325,9 @@ static void *ntp_sync_thread(void *data)
 			if (best.roundtrip_ms > NTP_RTT_GOOD_MS)
 				obs_log(LOG_WARNING,
 					"Best available NTP sample has high RTT (%lld ms) — "
-					"offset uncertainty up to ±%lld ms. Busy uplink "
-					"(upload/stream running?) or slow link.",
+					"offset uncertainty up to ±%lld ms. Household line "
+					"busy (someone streaming/uploading?); will re-measure "
+					"within 60 s.",
 					(long long)best.roundtrip_ms,
 					(long long)(best.roundtrip_ms / 2));
 		}

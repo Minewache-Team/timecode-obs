@@ -1567,6 +1567,38 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
   `src/ntp-client.c`, `src/ltc-source.c`, `src/metadata-writer.c`,
   `tests/test-mw-helpers.cpp`.
 
+#### TICKET-073: Shared-family-line refinements (ABR-burst-aware sampling, heartbeat timeouts)
+- **Status:** `DONE` (0.6.3)
+- **Type:** Hardening (network model refinement)
+- **Description:** User clarification: the lines are FAMILY connections —
+  "die Schwester streamt gerade Netflix" is the normal operating
+  condition, not an anomaly. Two consequences:
+  1. **ABR-burst-aware NTP sampling.** Streaming players (Netflix/
+     YouTube/Twitch) don't saturate the line continuously — they burst
+     one segment every few seconds at full line rate and idle in
+     between. The previous 250 ms gap between the three NTP samples
+     meant all of them landed inside the same burst (or the same idle
+     window), so min-RTT selection had nothing better to choose from.
+     `NTP_SAMPLE_GAP_MS` raised to 2000: three samples now span ~4.5 s,
+     making it likely at least one falls into a burst pause and measures
+     the real path. Costs time only when quality is already bad (a GOOD
+     first sample still exits immediately). Note: downstream congestion
+     (streaming) delays the NTP *response*, upstream congestion (upload)
+     the request — the offset bias direction differs, but both are
+     bounded by ±RTT/2, so min-RTT selection handles both identically.
+  2. **Heartbeat timeouts for congested lines.** Under household load,
+     TCP+TLS setup alone can exceed the previous 3 s connect timeout —
+     one failed POST puts a 60 s gap into `last_heartbeat` and the
+     camera flaps "offline" on the dashboard while recording fine.
+     `mw_http_post` now takes a timeout parameter:
+     10 s on the heartbeat thread (harmless vs. the 30 s interval),
+     5 s (status quo) for start/stop/consent which run on the OBS
+     frontend/UI thread where every blocked second is a frozen UI.
+     The UI-thread blocking itself (synchronous curl in a frontend
+     event callback) is a pre-existing design wart — async dispatch is
+     a candidate for a future ticket.
+- **Files:** `src/ltc-source.c`, `src/mw-recording.c`.
+
 #### TICKET-061: Scene form memory + +1 buttons
 - **Status:** `DONE`
 - **Type:** UX improvement (website-only)
@@ -1678,6 +1710,7 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 | Session | Date | Agent | Tickets Worked | Status at End | Notes |
 |---------|------|-------|----------------|---------------|-------|
+| 29 | 2026-06-10 | Claude (Fable) | TICKET-073 (done) | 0.6.3 ready | Family-line refinement after user clarification ("oft Familienanschlüsse — die Schwester streamt gerade Netflix"). (1) NTP-Sample-Gap 250 ms → 2000 ms: ABR-Player bursten segmentweise mit Sekunden-Pausen; drei Samples über ~4,5 s verteilt erwischen mit hoher Wahrscheinlichkeit eine Burst-Pause, eng beieinander liegende Samples sahen alle dieselbe Congestion (Min-RTT hatte nichts Besseres zur Auswahl). Kostet nur Zeit, wenn die Qualität ohnehin schlecht ist (GOOD-Sample → sofortiger Exit). (2) mw_http_post mit Timeout-Parameter: Heartbeat-Thread 10 s (eine über TLS-Setup stolpernde POST ließ die Kamera am Dashboard "offline" flackern, während sie sauber aufnimmt), Start/Stop/Consent bleiben bei 5 s weil sie auf dem OBS-UI-Thread laufen (sync curl im Frontend-Callback = vorbestehende Design-Warze, async-Dispatch als künftiges Ticket notiert). Log-Wording auf Haushalts-Realität angepasst ("Household line busy — someone streaming/uploading?"). 4/4 ctest-Suiten grün. |
 | 28 | 2026-06-10 | Claude (Fable) | TICKET-072 (done) | 0.6.3 ready | General hardening pass + network-model correction (user: "private Anschlüsse in Deutschland, eines der ekligsten Netze für so eine Aufgabe" — kein LTE-Hotspot-Szenario). Highlights: client-side JSON escaping for the display name (a quote in the name 400'd every heartbeat BEFORE server-side sanitizing → camera silently invisible; helper + 7 tests); SNTP hardening (connected UDP socket, RFC-4330 originate-timestamp nonce, 2036 era handling, pre-2020 garbage-server floor); AF_UNSPEC + address walking so DS-Lite lines use native IPv6 instead of CGNAT-tunneled IPv4; ≤60 s re-measure after mediocre-RTT cycles (evening congestion windows are minutes); loud LOG_ERROR on previously silent thread/event/encoder creation failures (TC free-running or silent audio without any hint); sidecar extension replacement basename-only + JSON-escaped path/server fields; Win32 UTF-8 conversion guarantees terminated strings, utf8_to_wide handles malloc failure, server URL tolerates trailing slash. heartbeat skips the tick on body-build failure instead of POSTing truncated JSON. 4/4 ctest suites green; only pre-existing system-libobs header warnings remain in the container check (CI builds against the real OBS SDK). |
 | 27 | 2026-06-10 | Claude (Fable) | TICKET-071 (done) | 0.6.3 ready | Network-reality safeguards for the NTP path (user mandate: the plugin must not be naive about the decentralized consumer networks it runs on). ntp_query measured roundtrip and discarded it; now: min-RTT-of-3 sampling per server (250 ms gaps against bufferbloat correlation), early exit below 150 ms, hard discard above 3 s, best-of-chain fallback so an LTE-hotspot shoot still gets NTP instead of degrading to HTTP/local, warning log with concrete ±RTT/2 uncertainty when accepting a mediocre sample. New pure helper `ntp_select_best_sample()` + 7 unit tests. Explicit non-goal documented in Decision Log: no history-based outlier rejection (would suppress legitimate OS-clock-step corrections). Worst-case chain duration ~26 s, still under the 60 s minimum sync interval. All 4 ctest suites green; -Wall -Wextra -Werror clean. |
 | 26 | 2026-06-10 | Claude (Fable) | TICKET-070 (done) | 0.6.3 ready | Use-case logic audit ("plausibel bis man an den Drehtag denkt"). (1) video_tick sample truncation drained ~0.6 ms/s from the audio timeline → 200 ms timestamp resync ≈ every 5 min = periodic LTC dropout + wobble vs. other tracks in EVERY long recording; fixed via fractional-sample accumulator + removed fabricated 33 ms output on zero ticks. (2) Cold-start burst ran on wall-clock schedule — PC boots before router (dezentrale Heimnetze!), burst verpufft, dann 5 min Funkstille; now burst-pace retry while never-synced, cycle_count reset on first success. (3) Drop-frame mapping emitted duplicate labels at minute boundaries (decoder/NLE lock loss); replaced with standard SMPTE 12M renumbering, tests updated + monotonicity test. (4) Dashboard "Letzte Sync" turned orange at 180 s with a 300 s default sync interval — healthy cameras cycled orange (cry-wolf); thresholds now 330/630 s. New regression test for the actual production encode path (set_timecode per frame): initial failure was a test-harness artifact (decoder queue holds 32 frames — must drain incrementally); with correct streaming the path decodes as strict +1 sequence, confirming TICKET-040's encoder usage is sound. All 4 ctest suites green (15 timecode tests incl. 3 new/updated DF, 13 roundtrip incl. new production-path test); -Wall -Wextra -Werror clean both frontend modes; app.js node --check clean. |
