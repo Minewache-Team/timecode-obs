@@ -69,10 +69,14 @@ static const char *NTP_FALLBACK_SERVERS[] = {
 #define NTP_FALLBACK_COUNT (sizeof(NTP_FALLBACK_SERVERS) / sizeof(NTP_FALLBACK_SERVERS[0]))
 
 /* Slewing: how fast the applied offset chases the latest raw measurement.
- * 1 ms / encoded LTC frame @ 25 fps = 25 ppm — within hardware LTC generator
- * tolerance (±50 ppm), so DaVinci Resolve syncs cleanly. 10 ms/frame when no
- * recording is active gives sub-minute catch-up after a 60 s clock jump. */
-#define SLEW_MS_PER_FRAME_RECORDING 1
+ * While recording, the correction rate must stay within hardware LTC
+ * generator tolerance (±50 ppm), otherwise the clip gets a non-linear
+ * timecode ramp baked in and DaVinci Resolve material drifts apart after
+ * the sync point: 1 ms per 40 s of encoded media = 25 ppm. Large offsets
+ * are closed between takes via the instant-apply edge
+ * (ltc_source_signal_recording_stopped), never inside a file.
+ * When idle, 10 ms/frame gives fast catch-up after a clock jump. */
+#define SLEW_RECORDING_SEC_PER_MS 40
 #define SLEW_MS_PER_FRAME_IDLE 10
 
 /* Degraded-state log throttle. First failure logs immediately; further
@@ -343,6 +347,7 @@ static void *ntp_sync_thread(void *data)
 			if (ctx->consecutive_sync_failures >= 3)
 				ctx->first_sync_done = false;
 
+#ifdef ENABLE_FRONTEND_API
 			/* TICKET-043: if we're actively recording AND we just
 			 * crossed the 3-failure threshold (i.e. NTP has been
 			 * silent for ~30 s already), mark this session as
@@ -359,6 +364,7 @@ static void *ntp_sync_thread(void *data)
 				}
 				ctx->sync_lost_in_session = true;
 			}
+#endif
 		}
 
 		/*
@@ -581,36 +587,45 @@ static void encode_next_frame(struct ltc_source_context *ctx)
 	if (!ctx->encoder)
 		return;
 
-	bool initial_sync = (!ctx->frame_valid) || (!ctx->first_sync_done);
-
-	/* On NTP recovery after a failure, when no recording is active, jump
-	 * to the new target instantly (matches the director's expectation
-	 * after clicking "Re-sync now"). TICKET-036 already prevents the
-	 * kick path from delivering a resync while recording, so this only
-	 * fires in safe states. */
-	bool instant_recover = false;
+	bool recording = false;
 #ifdef ENABLE_FRONTEND_API
-	if (ctx->ntp_sync_recovered_edge && !obs_frontend_recording_active()) {
-		instant_recover = true;
-	}
-	ctx->ntp_sync_recovered_edge = false;
-#else
-	if (ctx->ntp_sync_recovered_edge)
-		instant_recover = true;
-	ctx->ntp_sync_recovered_edge = false;
+	recording = obs_frontend_recording_active();
 #endif
+
+	/* Hard-applying the target is only allowed while no file is being
+	 * written (TICKET-008/036 contract). The !first_sync_done case
+	 * therefore waits for the recording to end: the NTP thread resets
+	 * that flag after 3 consecutive sync failures, and applying the
+	 * next successful measurement instantly mid-take would put a hard
+	 * TC jump into the file. The only exception is the very first
+	 * encoder frame after creation, where no continuity exists yet. */
+	bool initial_sync = (!ctx->frame_valid) ||
+			    (!ctx->first_sync_done && !recording);
+
+	/* On NTP recovery after a failure, director resync, or recording
+	 * stop, jump to the new target instantly — but only when idle.
+	 * The edge is consumed only when it can actually be applied; if it
+	 * fires mid-recording it stays set and is honoured on the first
+	 * idle frame after the recording stops. */
+	bool instant_recover = false;
+	if (ctx->ntp_sync_recovered_edge && !recording) {
+		instant_recover = true;
+		ctx->ntp_sync_recovered_edge = false;
+	}
 
 	if (initial_sync || instant_recover) {
 		ctx->ntp_offset_ms_applied = ctx->ntp_target_offset_ms;
 	} else {
 		int64_t step;
-#ifdef ENABLE_FRONTEND_API
-		step = obs_frontend_recording_active()
-			       ? SLEW_MS_PER_FRAME_RECORDING
-			       : SLEW_MS_PER_FRAME_IDLE;
-#else
-		step = SLEW_MS_PER_FRAME_IDLE;
-#endif
+		if (recording) {
+			/* ≤25 ppm: allow a 1 ms step once per
+			 * SLEW_RECORDING_SEC_PER_MS seconds of media. */
+			uint64_t interval = (uint64_t)ctx->nominal_fps *
+					    SLEW_RECORDING_SEC_PER_MS;
+			step = (ctx->frames_encoded % interval == 0) ? 1 : 0;
+		} else {
+			step = SLEW_MS_PER_FRAME_IDLE;
+		}
 		ctx->ntp_offset_ms_applied = ntp_slew_step(
 			ctx->ntp_offset_ms_applied,
 			ctx->ntp_target_offset_ms, step);

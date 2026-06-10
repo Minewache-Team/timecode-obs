@@ -63,7 +63,7 @@ void ltc_wrapper_destroy(ltc_wrapper_t *w);
  * @param year       Two-digit year (0-99)
  * @param month      Month (1-12)
  * @param day        Day (1-31)
- * @param camera_id  Camera identifier (0-7, maps to A-H)
+ * @param camera_id  Camera identifier (0-15, maps to A-P)
  */
 void ltc_wrapper_set_timecode(ltc_wrapper_t *w, int h, int m, int s, int f,
 			      int year, int month, int day, int camera_id);

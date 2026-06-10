@@ -320,6 +320,68 @@ TEST(LTCRoundtripTest, ContinuousTimecodeSequence25fps)
 }
 
 /*
+ * Camera IDs above 7 (Kamera I-P, ids 8-15) must reach user7 as well.
+ * Regression test: the wrapper used to silently drop ids > 7 after the
+ * dropdown was expanded to A-P in 0.4.0.
+ */
+TEST(LTCRoundtripTest, CameraIDUpperRangeRoundtrip)
+{
+	const int sample_rate = 48000;
+	const int spf = sample_rate / 25;
+
+	for (int camera_id : {8, 15}) {
+		ltc_wrapper_t *w = ltc_wrapper_create(sample_rate, TC_FPS_25);
+		ASSERT_NE(w, nullptr);
+
+		ltc_wrapper_set_timecode(w, 10, 0, 0, 0, 26, 6, 10, camera_id);
+
+		const int num_frames = 10;
+		const int total_max = spf * num_frames + 1000;
+		float *all_audio = new float[total_max];
+		int total_samples = 0;
+
+		for (int f = 0; f < num_frames; f++) {
+			float buffer[4800];
+			int samples = ltc_wrapper_encode_frame(w, buffer, 4800);
+			ASSERT_GT(samples, 0);
+			memcpy(&all_audio[total_samples], buffer,
+			       (size_t)samples * sizeof(float));
+			total_samples += samples;
+			ltc_wrapper_inc_timecode(w);
+		}
+
+		ltcsnd_sample_t *byte_buf = new ltcsnd_sample_t[total_samples];
+		for (int i = 0; i < total_samples; i++) {
+			byte_buf[i] = (ltcsnd_sample_t)((all_audio[i] * 128.0f) +
+							128.0f);
+		}
+
+		LTCDecoder *decoder = ltc_decoder_create(spf, 32);
+		ASSERT_NE(decoder, nullptr);
+		ltc_decoder_write(decoder, byte_buf, (size_t)total_samples, 0);
+
+		LTCFrameExt frame;
+		bool decoded = false;
+		while (ltc_decoder_read(decoder, &frame)) {
+			EXPECT_EQ(frame.ltc.user7, (unsigned)camera_id)
+				<< "camera_id " << camera_id
+				<< " did not survive the roundtrip";
+			EXPECT_EQ(frame.ltc.user8, 0u);
+			decoded = true;
+			break;
+		}
+		EXPECT_TRUE(decoded)
+			<< "Failed to decode LTC frames for camera_id "
+			<< camera_id;
+
+		delete[] all_audio;
+		delete[] byte_buf;
+		ltc_decoder_free(decoder);
+		ltc_wrapper_destroy(w);
+	}
+}
+
+/*
  * Verify that date (SMPTE 12M User Bits) and camera ID survive
  * the encode/decode roundtrip.
  */

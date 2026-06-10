@@ -1063,6 +1063,18 @@ static void on_frontend_event(enum obs_frontend_event event, void *data)
 {
 	(void)data;
 
+	/* TICKET-063: as soon as recording stops, ask each LTC source to
+	 * apply the current NTP target offset instantly on the next idle
+	 * frame, instead of slewing. Fixes the "50 s offset persists across
+	 * takes" bug (TICKET-059). This is purely local — nothing is
+	 * transmitted — so it must run for EVERY camera, before the
+	 * enabled/consent gates below. When it only ran for MW-enabled
+	 * cameras, mixed setups drifted apart: corrected cameras snapped to
+	 * NTP between takes while unconfigured ones kept their stale
+	 * offset, making relative sync WORSE than no correction at all. */
+	if (event == OBS_FRONTEND_EVENT_RECORDING_STOPPED)
+		ltc_source_signal_recording_stopped();
+
 	if (!g_initialized || !g_mw.enabled)
 		return;
 
@@ -1092,17 +1104,6 @@ static void on_frontend_event(enum obs_frontend_event event, void *data)
 		bool was_active = g_mw.recording_active;
 		g_mw.recording_active = false;
 		pthread_mutex_unlock(&g_mw.mutex);
-
-		/* TICKET-059: as soon as recording stops, ask each LTC source
-		 * to apply the current NTP target offset instantly on the next
-		 * idle frame, instead of slewing at 10 ms/frame. Fixes the
-		 * "50 s offset persists across takes" bug — slewing alone
-		 * cannot close a multi-second clock-skew gap in a normal
-		 * between-takes window, so without this the next recording
-		 * would start with a still-wrong applied offset. The jump
-		 * happens while no file is being written, so no LTC
-		 * discontinuity ends up on disk. */
-		ltc_source_signal_recording_stopped();
 
 		if (was_active) {
 			mw_send_stop();

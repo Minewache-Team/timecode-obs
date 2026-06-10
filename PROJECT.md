@@ -1261,6 +1261,71 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 - **Files:** `src/mw-recording.c`, `website/includes/db.php`,
   `buildspec.json`, `PROJECT.md`.
 
+#### TICKET-063: Drift correction applied inconsistently across cameras + slew-rate math error
+- **Status:** `DONE` (shipped as 0.6.3)
+- **Depends on:** TICKET-040, TICKET-059
+- **Type:** Bug / Sync hardening
+- **Description:** Cutter field report (2026-06): clips recorded at 30 fps
+  showed large offsets in DaVinci Resolve that got WORSE after TC sync.
+  Three root causes found:
+  1. **TICKET-059's between-takes offset jump was gated on MW Aufnahme.**
+     `ltc_source_signal_recording_stopped()` was called inside
+     `on_frontend_event` AFTER the `if (!g_mw.enabled) return;` guard. Cameras
+     without MW configured/enabled never applied the NTP target between
+     takes — so in a mixed fleet, some cameras snapped to correct time
+     between takes while others kept a stale applied offset for the whole
+     shoot. Relative sync across cameras became worse than before the
+     drift-correction existed. Fix: the call now runs before the
+     enabled/consent gates (it is purely local, transmits nothing).
+  2. **Recording slew rate was 1000× too fast.** `SLEW_MS_PER_FRAME_RECORDING=1`
+     was documented as "25 ppm @ 25 fps" but 1 ms per FRAME is 25 ms per
+     second = 25,000 ppm (30,000 ppm at 30 fps). Any take that started with
+     a stale applied offset got up to 30 ms of timecode correction per
+     second of media baked into the file — a non-linear TC ramp. Resolve
+     aligns at one TC point, then the material visibly drifts apart over
+     the clip ("offsets get worse after sync"). Fix: while recording the
+     applied offset now steps 1 ms per 40 s of encoded media (= 25 ppm,
+     truly within the ±50 ppm hardware LTC tolerance), gated by a frame
+     counter. Convergence between takes is handled by the (now ungated)
+     instant-apply edge.
+  3. **Hard TC jump mid-recording after sync loss + recovery.** The NTP
+     thread resets `first_sync_done` after 3 consecutive failures; the
+     encoder treated `!first_sync_done` as "apply target instantly" without
+     checking recording state, so the next successful measurement after a
+     ~network blip landed as a hard jump inside the file — violating the
+     TICKET-008/036 contract. Fix: instant apply only when not recording;
+     also, `ntp_sync_recovered_edge` is now only consumed when it can be
+     applied (previously it was cleared even while recording, losing the
+     edge).
+  Bonus fix: `obs_frontend_recording_active()` in `ntp_sync_thread`
+  (TICKET-043 block) was not guarded by `#ifdef ENABLE_FRONTEND_API` —
+  builds with the frontend API disabled failed to link.
+- **Acceptance Criteria:**
+  - [x] `ltc_source_signal_recording_stopped()` fires on RECORDING_STOPPED
+        regardless of MW enabled/consent state.
+  - [x] Recording slew rate ≤ 25 ppm (1 ms per 40 s of media).
+  - [x] No instant offset apply while a recording is active (neither via
+        `!first_sync_done` nor via the recovery edge).
+  - [x] Recovery edge survives until the first idle frame.
+  - [x] TICKET-043 block compiles with `ENABLE_FRONTEND_API=OFF`.
+  - [x] All ctest suites pass.
+- **Files:** `src/ltc-source.c`, `src/mw-recording.c`, `buildspec.json`.
+
+#### TICKET-064: Camera IDs I–P (8–15) never written to LTC User Bits
+- **Status:** `DONE` (shipped as 0.6.3)
+- **Depends on:** TICKET-032
+- **Type:** Bug
+- **Description:** TICKET-032 expanded the camera dropdown to A–P (0–15),
+  but `ltc_wrapper_set_timecode()` still guarded the user-bits write with
+  `camera_id <= 7`. For cameras I–P the `user7` field was silently left at
+  whatever the date encoding produced — wrong/garbage camera ID in every
+  recording from those cameras since 0.4.0. Fix: guard widened to 15;
+  header doc updated; regression test added (roundtrip with ids 8 and 15).
+- **Acceptance Criteria:**
+  - [x] `camera_id` 0–15 all reach `user7`.
+  - [x] New gtest `CameraIDUpperRangeRoundtrip` passes.
+- **Files:** `src/ltc-encoder-wrapper.c/h`, `tests/test-ltc-roundtrip.cpp`.
+
 #### TICKET-061: Scene form memory + +1 buttons
 - **Status:** `DONE`
 - **Type:** UX improvement (website-only)
@@ -1359,6 +1424,9 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 | 2026-05-23 | TICKET-056 | Roll back pause force-resume (TICKET-055), keep warning-only | Field-reproduced deadlock within ~2 h of 0.6.0 tag: calling `obs_frontend_recording_pause(false)` from inside the OBS frontend event callback caused the subsequent Stop transition to hang indefinitely. Re-entrancy into the frontend API from an event handler is not safe (no public docs confirm this either way, but the deadlock is reproducible). Warning-only is what 0.5.x shipped without incident. Future work: defer force-resume to a separate thread or async timer, then re-enable. | Try a small `os_sleep_ms` before the resume (still re-enters frontend API; likely same deadlock), keep the broken behaviour with a workaround for stuck-stop (no clean recovery path exists), drop the warning entirely (loses important signal). |
 | 2026-05-23 | TICKET-056 | Defensive `HEARTBEAT_TIMEOUT` default of 60 s in `db.php` | Production `config.php` was set to an unreasonably high value (or possibly not defined at all — the file is gitignored so we can't audit it from the repo). Killed plugins stayed "online" on the dashboard for the entire shoot, which is exactly the visibility regression the director cannot afford. 60 s = one plugin heartbeat interval (30 s) + one full miss + grace, matching the field intuition of "near-instant after kill". User-defined value in `config.php` still wins; this is a safety net for the case where the constant is missing. | Hardcode an even shorter timeout (false positives on transient network blips), pass via env var (more configuration surface), make heartbeat thread send more often (network load × 15 users for marginal latency win). |
 | 2026-05-23 | TICKET-058 | Filter GitHub releases by `name LIKE %Minewache%`, not by `target_commitish` | `target_commitish` for tag-pushed releases is the commit SHA, not the branch name, so it can't be used to filter for Minewache-branch releases. CI ships Minewache releases with "Minewache Specific Version" in the title (per Session 11 notes), which is a stable substring match. Picks the first non-prerelease, non-draft release that matches — robust against future master-branch releases being interleaved on the same repo. | Use `target_commitish` (returns commit SHA, useless for branch filter), tag pattern filter (no canonical naming convention enforced today), require config.php to pin the version (defeats the auto-fetch purpose). |
+| 2026-06-10 | TICKET-063 | Between-takes offset jump moved BEFORE the MW enabled/consent gates in `on_frontend_event` | The jump is purely local (no transmission), but living inside `mw-recording.c` behind `if (!g_mw.enabled) return;` made drift correction a side effect of MW telemetry being configured. In a mixed fleet that produced the worst possible outcome: corrected and uncorrected cameras diverged. Sync correctness must never depend on opt-in telemetry. | Move the trigger into `ltc-source.c` via its own frontend callback (cleaner long-term, but touches source lifecycle right before a shoot), leave as-is and require MW on all PCs (unenforceable in the field) |
+| 2026-06-10 | TICKET-063 | Recording slew rate fixed to a true 25 ppm via frame-counter gating (1 ms per 40 s of media) | The 0.5.x value `1 ms/frame` was justified in the Decision Log as "25 ppm @ 25 fps" — a 1000× math error (it is 25,000 ppm). At that rate a stale start offset turns into a non-linear TC ramp inside the clip, which is why cutters saw material drift apart AFTER syncing on a TC point. With TICKET-059/063 closing offsets between takes, in-take slewing only needs to track OS-clock micro-drift (~20 ppm), so 25 ppm is sufficient AND decode-safe. | Freeze offset entirely during recording (loses OS-drift tracking on multi-hour takes), sub-ms slewing via µs-granular applied offset (larger refactor, same audible result) |
+| 2026-06-10 | TICKET-063 | `!first_sync_done` instant-apply and recovery edge both gated on `!recording`; edge no longer cleared when it can't be applied | The 3-failure reset (TICKET-040) made `!first_sync_done` true during recordings with flaky networks; recovery then hard-jumped TC mid-file — exactly the discontinuity class TICKET-008/036 forbid. Keeping the edge set until the first idle frame means recovery/resync intent is never silently dropped. | Apply with LOG_WARNING mid-recording (still corrupts the file), separate "pending jump" flag (duplicates `ntp_sync_recovered_edge` semantics) |
 | 2026-05-23 | TICKET-059 | Auto-jump applied → target on RECORDING_STOPPED via existing `ntp_sync_recovered_edge` trigger | The slewing-only model from Epic 17 can't bridge a multi-second OS-clock skew between takes — 50 s offset needs 200 s idle slewing at 10 ms/frame, way longer than directors wait between takes. Re-using the existing edge-trigger plumbing (set the flag, encoder applies on next idle frame) keeps the fix to ~30 lines and doesn't introduce a new code path that needs separate testing. The contract preserved: jump only when NOT recording, so no LTC discontinuity ever lands in a file. Guard on `first_sync_done` skips the case where NTP has never succeeded — the `initial_sync` path already handles that. | Speed up idle slewing rate to 100 ms/frame (still 5 s for 50 s skew, and an arbitrary number), trigger only via dashboard click (already exists, but requires director attention every take), do nothing (was the bug). |
 
 ---
@@ -1367,6 +1435,7 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 | Session | Date | Agent | Tickets Worked | Status at End | Notes |
 |---------|------|-------|----------------|---------------|-------|
+| 23 | 2026-06-10 | Claude (Fable) | TICKET-063 (done), TICKET-064 (done) | 0.6.3 ready | Root-cause session for the cutter report "offsets got worse after sync" (30 fps shoot). Found + fixed three sync bugs: (1) TICKET-059's between-takes instant offset apply only fired when MW Aufnahme was enabled — `ltc_source_signal_recording_stopped()` sat behind `if (!g_mw.enabled) return;` in `on_frontend_event`, so unconfigured cameras kept stale applied offsets all day while MW cameras snapped correct → relative offsets across the fleet got worse, confirming the field suspicion. Call hoisted above the enabled/consent gates. (2) Recording slew rate was a 1000× math error: 1 ms/frame ≈ 30,000 ppm at 30 fps (Decision Log claimed 25 ppm). Takes that started with a stale offset got a non-linear TC ramp baked in → clips aligned at the sync point drift apart over their duration. Now 1 ms per 40 s of media (true 25 ppm) via frame-counter gating. (3) Sync-loss(≥3)+recovery mid-recording hard-jumped TC inside the file because `!first_sync_done` bypassed the recording check; now gated, and the recovery edge survives until the first idle frame instead of being consumed-and-dropped during recording. Also: TICKET-064 — camera IDs 8–15 (Kamera I–P) were silently never written to LTC user7 (`camera_id <= 7` guard missed in the TICKET-032 expansion); fixed + regression test `CameraIDUpperRangeRoundtrip`. Bonus: unguarded `obs_frontend_recording_active()` in the TICKET-043 block broke `ENABLE_FRONTEND_API=OFF` builds — wrapped in `#ifdef`. Verified: 4/4 standalone ctest suites green (timecode, ntp-offset, ltc-roundtrip incl. new test, mw-helpers); `ltc-source.c`/`mw-recording.c` syntax-clean against system libobs headers with and without frontend API. buildspec bumped to 0.6.3. |
 | 22 | 2026-05-27 | Claude Sonnet 4.6 | TICKET-061 (done), TICKET-062 (done) | Both DONE | Website-only UX polish. TICKET-061: scene modal now persists last-saved season/episode/scene_name in localStorage and pre-fills on reopen; take resets to 1 each time; +1 buttons added next to all three number fields for one-click increment. TICKET-062: "Kameras" column in scenes.php table now shows compact circular letter badges (22 px, tooltip = name) directly in the main row instead of a bare count — directors see who was in each scene without expanding. Expand-on-click detail row with full timestamps unchanged. No backend changes, no schema changes. |
 | 21 | 2026-05-23 | Claude Opus 4.7 (1M) | TICKET-057, TICKET-058, TICKET-059 | 0.6.2 shipped (server + plugin) | Cluster of follow-ups after 0.6.1. TICKET-057 (server-only): handle_start now copies plugin_version from the previous session row into the new one, so the dashboard doesn't show "Plugin V nicht gefunden" for ~30 s between recording start and first heartbeat. TICKET-058 (server-only): `latest_version.php` auto-fetches the latest release from the GitHub API (filtered to Minewache by matching "Minewache" in the release name), 1 h cache, multi-stage fallback. Replaces the previous hardcoded `window.MW_LATEST_PLUGIN_VERSION` so we never again forget to bump it on a release. Smoke-tested locally — returned "0.6.1". TICKET-059 (plugin): new `ltc_source_signal_recording_stopped()` API that sets `ntp_sync_recovered_edge=true` on every LTC source via `obs_enum_sources`, called from the `RECORDING_STOPPED` handler. Fixes the "50 s offset persists across takes" field bug — slewing alone (max 10 ms/frame idle) couldn't bridge a multi-second OS-clock skew in a normal between-takes window, and the existing edge trigger only fired on NTP degrade/recovery or director kick (neither happens for a steadily-wrong PC clock). Callback guards on `first_sync_done` so cold-start cases still use the `initial_sync` path. Build clean on Windows. |
 | 20 | 2026-05-23 | Claude Opus 4.7 (1M) | TICKET-055 (rolled back), TICKET-056 (done) | 0.6.1 hotfix shipped | Field-reproduced ~2 h after 0.6.0 tag: (a) TICKET-055 force-resume from inside `OBS_FRONTEND_EVENT_RECORDING_PAUSED` deadlocks the subsequent Stop ("Aufnahme wird beendet" hangs indefinitely) — re-entrancy into the OBS frontend API from an event callback is not safe. Reverted to warning-only modal (matches 0.5.x behaviour). (b) Killed OBS instances stayed "online" on the dashboard because `HEARTBEAT_TIMEOUT` constant was likely undefined or set too high in the production `config.php` (gitignored, can't see it). Added defensive `if (!defined('HEARTBEAT_TIMEOUT')) define(..., 60)` in `db.php` — 60 s = one full 30 s plugin heartbeat miss + 30 s grace. Files: `src/mw-recording.c`, `website/includes/db.php`. Build clean on Windows. |
