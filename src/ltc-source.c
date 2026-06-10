@@ -53,9 +53,24 @@
 #define AUDIO_BUF_FRAMES 9600 /* 200ms at 48kHz */
 #define MAX_FRAME_SAMPLES 4000 /* max samples per LTC frame (48000/24 = 2000) */
 #define NTP_QUERY_TIMEOUT_MS 2000
-#define NTP_RETRY_COUNT 3
 #define HTTP_FALLBACK_URL "https://www.google.com"
 #define HTTP_FALLBACK_TIMEOUT_MS 5000
+
+/* Network-quality gates for NTP samples (TICKET-071). The cameras sit on
+ * decentralized consumer connections all over Germany; a single SNTP
+ * sample's offset error is bounded by ±RTT/2, and bufferbloat on a busy
+ * home uplink inflates the RTT (and thus the error) by whole seconds.
+ * Per server we take up to NTP_SAMPLES_PER_SERVER measurements, keep the
+ * minimum-RTT one, and stop early once a sample is below
+ * NTP_RTT_GOOD_MS. A sample above NTP_RTT_HARD_MAX_MS is discarded
+ * outright. If no server in the chain yields a good sample, the best
+ * acceptable one across the whole chain is still used (a mediocre NTP
+ * measurement beats the HTTP Date fallback and beats free-running by a
+ * mile — think LTE hotspot on a remote shoot). */
+#define NTP_SAMPLES_PER_SERVER 3
+#define NTP_SAMPLE_GAP_MS 250 /* decorrelates bufferbloat spikes */
+#define NTP_RTT_GOOD_MS 150
+#define NTP_RTT_HARD_MAX_MS 3000
 
 /* Built-in NTP fallbacks: tried in order after the user-configured server.
  * Both are widely-deployed anycast services that route through different
@@ -230,36 +245,74 @@ static void *ntp_sync_thread(void *data)
 			 ctx->ntp_server);
 		pthread_mutex_unlock(&ctx->encoder_mutex);
 
-		/* 1) User-configured NTP server */
-		for (int attempt = 0; attempt < NTP_RETRY_COUNT; attempt++) {
-			if (os_event_try(ctx->stop_event) == 0)
-				return NULL;
-
-			if (ntp_query(server_copy, NTP_QUERY_TIMEOUT_MS,
-				      &result)) {
-				success = true;
-				break;
-			}
+		/* 1+2) NTP chain: user-configured server, then the built-in
+		 * anycast fallbacks. Per server: sample up to
+		 * NTP_SAMPLES_PER_SERVER times, keep the minimum-RTT sample
+		 * (its offset error is bounded by ±RTT/2), stop the chain as
+		 * soon as one sample is GOOD. A merely acceptable best-of-
+		 * chain sample is used only after every server had a shot at
+		 * producing a better one. */
+		const char *chain[1 + NTP_FALLBACK_COUNT];
+		int chain_len = 0;
+		chain[chain_len++] = server_copy;
+		for (size_t s = 0; s < NTP_FALLBACK_COUNT; s++) {
+			if (strcmp(NTP_FALLBACK_SERVERS[s], server_copy) != 0)
+				chain[chain_len++] = NTP_FALLBACK_SERVERS[s];
 		}
 
-		/* 2) Built-in NTP anycast fallbacks */
-		for (size_t s = 0; s < NTP_FALLBACK_COUNT && !success; s++) {
-			const char *fb = NTP_FALLBACK_SERVERS[s];
-			if (strcmp(fb, server_copy) == 0)
-				continue; /* already tried via user-config */
-			for (int attempt = 0; attempt < NTP_RETRY_COUNT;
-			     attempt++) {
+		ntp_result_t best = {0};
+		const char *best_server = NULL;
+
+		for (int si = 0; si < chain_len; si++) {
+			ntp_result_t samples[NTP_SAMPLES_PER_SERVER];
+			int n = 0;
+
+			for (int attempt = 0;
+			     attempt < NTP_SAMPLES_PER_SERVER; attempt++) {
 				if (os_event_try(ctx->stop_event) == 0)
 					return NULL;
-				if (ntp_query(fb, NTP_QUERY_TIMEOUT_MS,
-					      &result)) {
-					success = true;
-					obs_log(LOG_INFO,
-						"NTP fallback succeeded via %s (user-server '%s' unreachable)",
-						fb, server_copy);
-					break;
+
+				ntp_result_t r;
+				if (ntp_query(chain[si], NTP_QUERY_TIMEOUT_MS,
+					      &r)) {
+					samples[n++] = r;
+					if (r.roundtrip_ms <= NTP_RTT_GOOD_MS)
+						break;
 				}
+
+				if (attempt + 1 < NTP_SAMPLES_PER_SERVER &&
+				    os_event_timedwait(ctx->stop_event,
+						       NTP_SAMPLE_GAP_MS) == 0)
+					return NULL;
 			}
+
+			int bi = ntp_select_best_sample(samples, n,
+							NTP_RTT_HARD_MAX_MS);
+			if (bi >= 0 &&
+			    (!success ||
+			     samples[bi].roundtrip_ms < best.roundtrip_ms)) {
+				best = samples[bi];
+				best_server = chain[si];
+				success = true;
+			}
+
+			if (success && best.roundtrip_ms <= NTP_RTT_GOOD_MS)
+				break; /* good enough — stop the chain */
+		}
+
+		if (success) {
+			result = best;
+			if (best_server != server_copy)
+				obs_log(LOG_INFO,
+					"NTP answered via %s (user-server '%s' unreachable or too slow)",
+					best_server, server_copy);
+			if (best.roundtrip_ms > NTP_RTT_GOOD_MS)
+				obs_log(LOG_WARNING,
+					"Best available NTP sample has high RTT (%lld ms) — "
+					"offset uncertainty up to ±%lld ms. Busy uplink "
+					"(upload/stream running?) or slow link.",
+					(long long)best.roundtrip_ms,
+					(long long)(best.roundtrip_ms / 2));
 		}
 
 		/* 3) HTTP Date header fallback (last resort with a real source) */

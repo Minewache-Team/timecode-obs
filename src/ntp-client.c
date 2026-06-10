@@ -224,6 +224,27 @@ void ntp_corrected_time(int64_t offset_ms, int64_t *out_sec, int64_t *out_usec)
 		*out_usec = total_usec;
 }
 
+int ntp_select_best_sample(const ntp_result_t *samples, int count,
+			   int64_t max_rtt_ms)
+{
+	int best = -1;
+
+	if (!samples)
+		return -1;
+
+	for (int i = 0; i < count; i++) {
+		if (!samples[i].success)
+			continue;
+		if (max_rtt_ms > 0 && samples[i].roundtrip_ms > max_rtt_ms)
+			continue;
+		if (best < 0 ||
+		    samples[i].roundtrip_ms < samples[best].roundtrip_ms)
+			best = i;
+	}
+
+	return best;
+}
+
 int64_t ntp_slew_step(int64_t applied_ms, int64_t target_ms, int64_t max_step_ms)
 {
 	if (max_step_ms <= 0)
