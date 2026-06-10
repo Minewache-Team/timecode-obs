@@ -1599,6 +1599,43 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
      a candidate for a future ticket.
 - **Files:** `src/ltc-source.c`, `src/mw-recording.c`.
 
+#### TICKET-074: Discord-support-grade user surface (German locale, support line, dialog mojibake)
+- **Status:** `DONE` (0.6.3)
+- **Type:** UX / Supportability
+- **Description:** Operating reality (user): many operators are
+  completely non-technical, but they sit in Discord WITH the developer
+  and director while using the plugin. The support flow is therefore
+  "user screenshots/pastes something into Discord, developer diagnoses
+  remotely" — and the plugin's user-visible surface must serve exactly
+  that flow:
+  1. **German locale (`data/locale/de-DE.ini`).** The entire fleet is
+     German and non-technical; warnings shown only in English are as
+     good as no warnings. German OBS installs pick the locale up
+     automatically (OBS falls back to en-US otherwise). All installers
+     already deploy `data/` recursively — no packaging changes needed.
+  2. **Actionable warnings.** `NTPDegradedWarning`, `NTPNotSynced` and
+     `TrackNotRecorded` now tell the user WHAT TO DO ("SOFORT im
+     Discord melden", "VOR der Aufnahme im Discord melden") instead of
+     only describing the condition in technical terms.
+  3. **Diagnosis-grade status line.** The Properties sync status now
+     includes measurement age and RTT
+     ("Zeit synchron (NTP) — Abweichung +12 ms (gemessen vor 23 s,
+     RTT 18 ms)") — a screenshot of the panel answers the first three
+     questions the developer would otherwise have to ask.
+  4. **Support line for copy/paste.** New `_support_info` text property:
+     one dense line ("obs-ltc-timecode v0.6.3 | Cam C | 30 fps |
+     Track 3 | NTP +12 ms @23s RTT 18 ms | TC 14:33:12:05") explicitly
+     labelled "diese Zeile in den Discord posten". Version, camera, fps,
+     track, sync method/offset/age/RTT and current TC in one screenshot.
+  5. **Dialog mojibake fixed.** `auto-setup.c` used `MessageBoxA` with
+     UTF-8 umlauts in the strings — German Windows rendered "MÃ¶chtest".
+     Migrated to `MessageBoxW` with `\u` escapes (the same TICKET-030
+     migration the MW dialogs already got). A garbled first-run dialog
+     is exactly what a nervous non-technical user screenshots into
+     Discord, and it destroys trust in the whole setup.
+- **Files:** `data/locale/en-US.ini`, `data/locale/de-DE.ini` (new),
+  `src/ltc-source.c`, `src/auto-setup.c`.
+
 #### TICKET-061: Scene form memory + +1 buttons
 - **Status:** `DONE`
 - **Type:** UX improvement (website-only)
@@ -1710,6 +1747,7 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 | Session | Date | Agent | Tickets Worked | Status at End | Notes |
 |---------|------|-------|----------------|---------------|-------|
+| 30 | 2026-06-10 | Claude (Fable) | TICKET-074 (done) | 0.6.3 ready | Support-surface round after user context ("viele Nutzer sind strohdumm, sitzen aber WÄHREND der Nutzung im Discord mit Entwickler+Regisseur"). Consequence: the user-visible surface must be Discord-relay-grade, logs are unreachable for this audience. Shipped: de-DE.ini (full German locale — English-only warnings were de-facto invisible for this fleet; OBS picks it up on German installs, installers deploy data/ recursively anyway); warnings now carry instructions ("SOFORT im Discord melden") instead of just describing the condition; Properties status enriched with measurement age + RTT; new `_support_info` property = one dense line (version | Cam | fps | Track | method offset @age RTT | TC) explicitly labelled for screenshot/paste into Discord; auto-setup dialogs migrated MessageBoxA→W with \u escapes — UTF-8 umlauts through the ANSI API rendered "MÃ¶chtest" on German Windows since the first release (the MW dialogs got this fix in TICKET-030, auto-setup was missed). Verified: 4/4 ctest suites green, syntax-clean both frontend modes (only known system-libobs header warnings in container). |
 | 29 | 2026-06-10 | Claude (Fable) | TICKET-073 (done) | 0.6.3 ready | Family-line refinement after user clarification ("oft Familienanschlüsse — die Schwester streamt gerade Netflix"). (1) NTP-Sample-Gap 250 ms → 2000 ms: ABR-Player bursten segmentweise mit Sekunden-Pausen; drei Samples über ~4,5 s verteilt erwischen mit hoher Wahrscheinlichkeit eine Burst-Pause, eng beieinander liegende Samples sahen alle dieselbe Congestion (Min-RTT hatte nichts Besseres zur Auswahl). Kostet nur Zeit, wenn die Qualität ohnehin schlecht ist (GOOD-Sample → sofortiger Exit). (2) mw_http_post mit Timeout-Parameter: Heartbeat-Thread 10 s (eine über TLS-Setup stolpernde POST ließ die Kamera am Dashboard "offline" flackern, während sie sauber aufnimmt), Start/Stop/Consent bleiben bei 5 s weil sie auf dem OBS-UI-Thread laufen (sync curl im Frontend-Callback = vorbestehende Design-Warze, async-Dispatch als künftiges Ticket notiert). Log-Wording auf Haushalts-Realität angepasst ("Household line busy — someone streaming/uploading?"). 4/4 ctest-Suiten grün. |
 | 28 | 2026-06-10 | Claude (Fable) | TICKET-072 (done) | 0.6.3 ready | General hardening pass + network-model correction (user: "private Anschlüsse in Deutschland, eines der ekligsten Netze für so eine Aufgabe" — kein LTE-Hotspot-Szenario). Highlights: client-side JSON escaping for the display name (a quote in the name 400'd every heartbeat BEFORE server-side sanitizing → camera silently invisible; helper + 7 tests); SNTP hardening (connected UDP socket, RFC-4330 originate-timestamp nonce, 2036 era handling, pre-2020 garbage-server floor); AF_UNSPEC + address walking so DS-Lite lines use native IPv6 instead of CGNAT-tunneled IPv4; ≤60 s re-measure after mediocre-RTT cycles (evening congestion windows are minutes); loud LOG_ERROR on previously silent thread/event/encoder creation failures (TC free-running or silent audio without any hint); sidecar extension replacement basename-only + JSON-escaped path/server fields; Win32 UTF-8 conversion guarantees terminated strings, utf8_to_wide handles malloc failure, server URL tolerates trailing slash. heartbeat skips the tick on body-build failure instead of POSTing truncated JSON. 4/4 ctest suites green; only pre-existing system-libobs header warnings remain in the container check (CI builds against the real OBS SDK). |
 | 27 | 2026-06-10 | Claude (Fable) | TICKET-071 (done) | 0.6.3 ready | Network-reality safeguards for the NTP path (user mandate: the plugin must not be naive about the decentralized consumer networks it runs on). ntp_query measured roundtrip and discarded it; now: min-RTT-of-3 sampling per server (250 ms gaps against bufferbloat correlation), early exit below 150 ms, hard discard above 3 s, best-of-chain fallback so an LTE-hotspot shoot still gets NTP instead of degrading to HTTP/local, warning log with concrete ±RTT/2 uncertainty when accepting a mediocre sample. New pure helper `ntp_select_best_sample()` + 7 unit tests. Explicit non-goal documented in Decision Log: no history-based outlier rejection (would suppress legitimate OS-clock-step corrections). Worst-case chain duration ~26 s, still under the 60 s minimum sync interval. All 4 ctest suites green; -Wall -Wextra -Werror clean. |

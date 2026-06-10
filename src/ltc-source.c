@@ -1181,20 +1181,30 @@ static obs_properties_t *ltc_source_get_properties(void *data)
 
 	/* NTP status — live snapshot. OBS rebuilds the properties each time the
 	 * dialog is opened, so this reflects the sync state at open time. The
-	 * old code passed the static "NTP Status" label here, so the actual
-	 * sync result was never shown to the operator. */
+	 * operators are non-technical and sit in Discord with the developer
+	 * while using this — the status text carries offset, age and RTT so a
+	 * screenshot of this panel is diagnosis-grade. */
 	if (ctx) {
-		char status_buf[160];
+		char status_buf[192];
 		int off = (int)ctx->ntp_last_raw_offset_ms;
+		int rtt = (int)ctx->ntp_roundtrip_ms;
+		int age = -1;
+		uint64_t last_ns = ctx->ntp_last_sync_ns;
+		if (last_ns) {
+			uint64_t now_ns = os_gettime_ns();
+			age = (int)(((now_ns > last_ns) ? now_ns - last_ns
+						        : 0) /
+				    1000000000ULL);
+		}
 		if (!ctx->ntp_synced)
 			snprintf(status_buf, sizeof(status_buf), "%s",
 				 obs_module_text("NTPNotSynced"));
 		else if (ctx->sync_method == SYNC_METHOD_HTTP)
 			snprintf(status_buf, sizeof(status_buf),
-				 obs_module_text("HTTPSynced"), off);
+				 obs_module_text("HTTPSynced"), off, age);
 		else
 			snprintf(status_buf, sizeof(status_buf),
-				 obs_module_text("NTPSynced"), off);
+				 obs_module_text("NTPSynced"), off, age, rtt);
 		obs_properties_add_text(props, "_ntp_status", status_buf,
 					OBS_TEXT_INFO);
 	} else {
@@ -1203,9 +1213,11 @@ static obs_properties_t *ltc_source_get_properties(void *data)
 					OBS_TEXT_INFO);
 	}
 
-	/* Current timecode — live snapshot. The old code computed the string
-	 * into tc_buf and then threw it away, displaying only the static
-	 * "Current Timecode" label. */
+	/* Current timecode — live snapshot, plus one dense support line that
+	 * a non-technical operator can screenshot or paste into Discord. The
+	 * line carries everything needed for remote diagnosis (version,
+	 * camera, fps, track, sync method/offset/age/RTT, current TC) so the
+	 * developer doesn't have to play twenty questions mid-shoot. */
 	if (ctx) {
 		int64_t sec, usec;
 		ntp_corrected_time(ctx->ntp_offset_ms_applied, &sec, &usec);
@@ -1218,6 +1230,35 @@ static obs_properties_t *ltc_source_get_properties(void *data)
 		snprintf(tc_label, sizeof(tc_label), "%s: %s",
 			 obs_module_text("CurrentTimecode"), tc_buf);
 		obs_properties_add_text(props, "_timecode", tc_label,
+					OBS_TEXT_INFO);
+
+		const char *method_str = "LOCAL";
+		if (ctx->ntp_synced)
+			method_str = (ctx->sync_method == SYNC_METHOD_HTTP)
+					     ? "HTTP"
+					     : "NTP";
+		char age_str[16];
+		uint64_t last_ns = ctx->ntp_last_sync_ns;
+		if (last_ns) {
+			uint64_t now_ns = os_gettime_ns();
+			snprintf(age_str, sizeof(age_str), "@%ds",
+				 (int)(((now_ns > last_ns) ? now_ns - last_ns
+							   : 0) /
+				       1000000000ULL));
+		} else {
+			snprintf(age_str, sizeof(age_str), "@-");
+		}
+
+		char support[320];
+		snprintf(support, sizeof(support),
+			 "%s\nobs-ltc-timecode v%s | Cam %c | %d fps | Track %d | "
+			 "%s %+d ms %s RTT %d ms | TC %s",
+			 obs_module_text("SupportInfo"), PLUGIN_VERSION,
+			 'A' + ctx->camera_id, ctx->nominal_fps,
+			 ctx->audio_track, method_str,
+			 (int)ctx->ntp_last_raw_offset_ms, age_str,
+			 (int)ctx->ntp_roundtrip_ms, tc_buf);
+		obs_properties_add_text(props, "_support_info", support,
 					OBS_TEXT_INFO);
 	} else {
 		obs_properties_add_text(props, "_timecode",
