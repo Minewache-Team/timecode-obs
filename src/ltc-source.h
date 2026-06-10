@@ -43,6 +43,51 @@ typedef enum {
 void ltc_source_register(void);
 
 /*
+ * Full diagnostic snapshot of the first LTC source (TICKET-075).
+ *
+ * One struct feeds all three remote-debugging channels — MW heartbeat
+ * (live dashboard), metadata sidecar (post-mortem), and log lines — so
+ * the developer/director see the SAME numbers everywhere:
+ *
+ *   raw_offset_ms     — latest raw NTP measurement (how far the OS clock
+ *                       is off)
+ *   applied_offset_ms — what the encoder is currently using
+ *   applied_delta_ms  — raw - applied: how far the RECORDED timecode is
+ *                       from correct right now (the number the director
+ *                       actually cares about during a take; 0 = slewing
+ *                       has fully converged)
+ *   rtt_ms            — roundtrip of the accepted NTP sample = line
+ *                       quality; offset uncertainty is bounded by ±rtt/2
+ *   offset_age_sec    — seconds since the measurement, -1 = never synced
+ *   sync_method       — sync_method_t as int
+ *   synced            — latest sync attempt succeeded
+ *   sync_lost_in_session — sticky TICKET-043 flag
+ *   initial_skew_ms   — PC clock error found at the FIRST sync
+ *                       (TICKET-044); 0 = none detected. Tells the
+ *                       developer whose Windows clock was broken at boot.
+ *   nominal_fps       — LTC framerate of the source
+ */
+typedef struct {
+	int64_t raw_offset_ms;
+	int64_t applied_offset_ms;
+	int64_t applied_delta_ms;
+	int64_t rtt_ms;
+	int offset_age_sec;
+	int sync_method;
+	bool synced;
+	bool sync_lost_in_session;
+	int64_t initial_skew_ms;
+	int nominal_fps;
+} ltc_diag_t;
+
+/*
+ * Fill `out` from the first LTC source in this OBS instance.
+ * Returns false (and zeroes `out`, age = -1) when no LTC source exists.
+ * Lock-free volatile reads; safe to call from any thread.
+ */
+bool ltc_source_get_diag(ltc_diag_t *out);
+
+/*
  * Read the current NTP offset from the first LTC source in this OBS instance.
  *
  * Outputs (only valid when the call returns true):

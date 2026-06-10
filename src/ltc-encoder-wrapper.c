@@ -127,8 +127,9 @@ void ltc_wrapper_set_timecode(ltc_wrapper_t *w, int h, int m, int s, int f,
 
 	/* Store camera ID in user bits 7 (not used by SMPTE date encoding).
 	 * ltc_frame_increment() never touches user7/user8, so camera ID
-	 * persists across inc_timecode calls. */
-	if (camera_id >= 0 && camera_id <= 7) {
+	 * persists across inc_timecode calls. user7 is 4 bits — the full
+	 * A–P range (0–15) fits exactly. */
+	if (camera_id >= 0 && camera_id <= 15) {
 		LTCFrame ltc_frame;
 		ltc_encoder_get_frame(w->encoder, &ltc_frame);
 		ltc_frame.user7 = (unsigned int)(camera_id & 0x0F);

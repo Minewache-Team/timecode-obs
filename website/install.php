@@ -8,6 +8,25 @@
 
 require_once __DIR__ . '/includes/db.php';
 
+/* Schutz gegen wiederholtes/unbefugtes Ausfuehren in Produktion.
+ * install.php legt Tabellen an und macht ALTER TABLEs — das soll genau
+ * einmal beim Setup laufen, nicht von beliebigen Besuchern wiederholt
+ * abrufbar sein (Schema-Probing, versehentliche Migrationslaeufe). Nach
+ * erfolgreichem Lauf wird ein Marker geschrieben; danach verweigert das
+ * Skript den Dienst, bis der Admin den Marker (oder die Datei) entfernt.
+ * Tests umgehen das ueber MW_TEST_MODE (frische _test-DB pro Lauf). */
+if (!defined('MW_TEST_MODE') || !MW_TEST_MODE) {
+    $install_marker = __DIR__ . '/.install_complete';
+    if (file_exists($install_marker)) {
+        http_response_code(403);
+        echo "<h1>Installation bereits abgeschlossen</h1>";
+        echo "<p>Loesche die Datei <code>install.php</code> (empfohlen) "
+            . "oder den Marker <code>.install_complete</code>, um erneut "
+            . "zu installieren.</p>";
+        exit;
+    }
+}
+
 try {
     $db = get_db();
 
@@ -107,6 +126,21 @@ try {
         $db->exec("ALTER TABLE sessions ADD COLUMN sync_lost_in_session TINYINT(1) NOT NULL DEFAULT 0 AFTER offset_age_sec");
     } catch (PDOException $e) { /* bereits vorhanden */ }
 
+    /* TICKET-075: Remote-Diagnose-Felder. rtt_ms = Leitungsqualitaet der
+     * akzeptierten NTP-Messung (Offset-Unsicherheit <= ±rtt/2),
+     * applied_delta_ms = Live-Abstand zwischen aufgezeichnetem Timecode
+     * und Messziel (0 = konvergiert), initial_skew_ms = PC-Uhr-Fehler beim
+     * ersten Sync (0 = keiner; "wessen Windows-Uhr war beim Boot kaputt"). */
+    try {
+        $db->exec("ALTER TABLE sessions ADD COLUMN rtt_ms INT NULL AFTER sync_lost_in_session");
+    } catch (PDOException $e) { /* bereits vorhanden */ }
+    try {
+        $db->exec("ALTER TABLE sessions ADD COLUMN applied_delta_ms INT NULL AFTER rtt_ms");
+    } catch (PDOException $e) { /* bereits vorhanden */ }
+    try {
+        $db->exec("ALTER TABLE sessions ADD COLUMN initial_skew_ms INT NULL AFTER applied_delta_ms");
+    } catch (PDOException $e) { /* bereits vorhanden */ }
+
     echo "<h1>Installation erfolgreich!</h1>";
     echo "<p>Alle 3 Tabellen wurden angelegt:</p>";
     echo "<ul>";
@@ -115,6 +149,13 @@ try {
     echo "<li><strong>consent_log</strong> - DSGVO-Einwilligungen</li>";
     echo "</ul>";
     echo "<p style='color:red;'><strong>WICHTIG:</strong> Lösche oder benenne diese Datei um!</p>";
+
+    /* Marker schreiben, damit ein erneuter Aufruf abgewiesen wird (siehe
+     * Guard oben). Im Test-Modus nicht schreiben — dort laeuft install.php
+     * absichtlich bei jedem Lauf gegen eine frische _test-DB. */
+    if (!defined('MW_TEST_MODE') || !MW_TEST_MODE) {
+        @file_put_contents(__DIR__ . '/.install_complete', date('c') . "\n");
+    }
 
 } catch (PDOException $e) {
     http_response_code(500);

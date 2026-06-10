@@ -24,6 +24,69 @@
 #include <stdio.h>
 #include <string.h>
 
+int mw_json_escape_string(char *dst, size_t dstsz, const char *src)
+{
+	if (!dst || dstsz == 0)
+		return -1;
+
+	size_t o = 0;
+	dst[0] = '\0';
+	if (!src)
+		return 0;
+
+	for (const unsigned char *p = (const unsigned char *)src; *p; p++) {
+		char tmp[8];
+		const char *rep;
+		size_t replen;
+
+		switch (*p) {
+		case '"':
+			rep = "\\\"";
+			replen = 2;
+			break;
+		case '\\':
+			rep = "\\\\";
+			replen = 2;
+			break;
+		case '\n':
+			rep = "\\n";
+			replen = 2;
+			break;
+		case '\r':
+			rep = "\\r";
+			replen = 2;
+			break;
+		case '\t':
+			rep = "\\t";
+			replen = 2;
+			break;
+		default:
+			if (*p < 0x20) {
+				snprintf(tmp, sizeof(tmp), "\\u%04x",
+					 (unsigned)*p);
+				rep = tmp;
+				replen = 6;
+			} else {
+				tmp[0] = (char)*p;
+				tmp[1] = '\0';
+				rep = tmp;
+				replen = 1;
+			}
+			break;
+		}
+
+		if (o + replen + 1 > dstsz) {
+			dst[o] = '\0';
+			return -1;
+		}
+		memcpy(dst + o, rep, replen);
+		o += replen;
+	}
+
+	dst[o] = '\0';
+	return (int)o;
+}
+
 int mw_build_heartbeat_body(char *buf, size_t bufsz,
 			    const char *name,
 			    bool recording_active,
@@ -34,12 +97,20 @@ int mw_build_heartbeat_body(char *buf, size_t bufsz,
 			    int64_t raw_offset_ms,
 			    int offset_age_sec,
 			    const char *plugin_version,
-			    bool sync_lost_in_session)
+			    bool sync_lost_in_session,
+			    int64_t rtt_ms,
+			    int64_t applied_delta_ms,
+			    int64_t initial_skew_ms)
 {
 	if (!buf || bufsz == 0)
 		return -1;
-	if (!name)
-		name = "";
+
+	/* Escape the user-controlled display name — one quote in it must not
+	 * invalidate the whole heartbeat (the server 400s broken JSON before
+	 * its own name sanitization ever runs). */
+	char esc_name[320];
+	if (mw_json_escape_string(esc_name, sizeof(esc_name), name) < 0)
+		return -1;
 
 	bool have_version = (plugin_version != NULL && plugin_version[0] != '\0');
 	const char *sync_lost_str = sync_lost_in_session ? "true" : "false";
@@ -49,7 +120,7 @@ int mw_build_heartbeat_body(char *buf, size_t bufsz,
 	 * earlier collapsed into one path. */
 	int n = snprintf(buf, bufsz,
 			 "{\"name\":\"%s\",\"recording_active\":%s",
-			 name,
+			 esc_name,
 			 recording_active ? "true" : "false");
 	if (n < 0)
 		return -1;
@@ -57,15 +128,27 @@ int mw_build_heartbeat_body(char *buf, size_t bufsz,
 		return -1;
 
 	if (have_offset) {
+		/* TICKET-075: rtt_ms (line quality — offset uncertainty is
+		 * bounded by ±rtt/2), applied_delta_ms (how far the recorded
+		 * TC currently is from the measured target — the number the
+		 * director actually cares about during a take) and
+		 * initial_skew_ms (PC clock error found at first sync,
+		 * 0 = none) ride along additively so the developer can
+		 * remote-diagnose without asking the operator anything. */
 		int m = snprintf(buf + n, bufsz - (size_t)n,
 				 ",\"offset_ms\":%lld,\"sync_method\":%d,"
 				 "\"synced\":%s,\"raw_offset_ms\":%lld,"
-				 "\"offset_age_sec\":%d",
+				 "\"offset_age_sec\":%d,\"rtt_ms\":%lld,"
+				 "\"applied_delta_ms\":%lld,"
+				 "\"initial_skew_ms\":%lld",
 				 (long long)offset_ms,
 				 sync_method,
 				 synced ? "true" : "false",
 				 (long long)raw_offset_ms,
-				 offset_age_sec);
+				 offset_age_sec,
+				 (long long)rtt_ms,
+				 (long long)applied_delta_ms,
+				 (long long)initial_skew_ms);
 		if (m < 0)
 			return -1;
 		n += m;

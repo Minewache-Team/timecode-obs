@@ -31,9 +31,12 @@ if ($take < 1) {
     $take = 1;
 }
 
-/* Eingaben bereinigen */
+/* Eingaben bereinigen — nur laengenbegrenzen. NICHT hier HTML-escapen:
+ * scenes.php escaped die Werte beim Ausgeben mit htmlspecialchars().
+ * Doppeltes Escapen wuerde "A&B" als "A&amp;B" speichern und im
+ * Dashboard als "A&amp;B" anzeigen. Roh speichern, beim Output escapen
+ * (gilt fuer scene_name und notes gleichermassen). */
 $scene_name = mb_substr($scene_name, 0, 255, 'UTF-8');
-$scene_name = htmlspecialchars($scene_name, ENT_QUOTES, 'UTF-8');
 $notes = mb_substr($notes, 0, 1000, 'UTF-8');
 
 $db = get_db();

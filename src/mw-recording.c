@@ -70,8 +70,11 @@
  *
  *   v1 (0.3.x – 0.5.x): name, recording_active, offset_ms, sync_method,
  *                       synced, raw_offset_ms, offset_age_sec
- *   v2 (0.6.0):         + plugin_version, sync_lost_in_session */
-#define MW_CURRENT_CONSENT_VERSION 2
+ *   v2 (0.6.0):         + plugin_version, sync_lost_in_session
+ *   v3 (0.6.3):         + rtt_ms (Leitungsqualität), applied_delta_ms
+ *                       (TC-Restabweichung), initial_skew_ms
+ *                       (PC-Uhr-Fehler beim Start) — TICKET-075 */
+#define MW_CURRENT_CONSENT_VERSION 3
 
 /* ---- Global state ---- */
 
@@ -236,19 +239,40 @@ static size_t capture_write(char *ptr, size_t size, size_t nmemb, void *userdata
 	return bytes;
 }
 
+/* Timeouts for shared family lines: under household load (someone
+ * streaming/uploading) TCP+TLS setup alone can take several seconds. A
+ * too-tight timeout turns line congestion into missed heartbeats, and the
+ * camera flaps "offline" on the dashboard while actually recording fine.
+ * The generous value is only safe on the heartbeat THREAD — start/stop/
+ * consent run on the OBS frontend (UI) thread, where every blocked second
+ * is a frozen UI, so they keep the shorter budget. */
+#define MW_HTTP_TIMEOUT_THREAD_MS 10000L
+#define MW_HTTP_TIMEOUT_UI_MS 5000L
+
 /*
  * POST to the MW API. If response_out is non-NULL, captures up to response_max-1
  * bytes of the response body (null-terminated). Pass NULL/0 to discard.
+ * timeout_ms: total transfer budget (connect phase gets half of it).
  */
 static bool mw_http_post(const char *base_url, const char *url_suffix,
 			 const char *api_key, const char *json_body,
-			 char *response_out, size_t response_max)
+			 char *response_out, size_t response_max,
+			 long timeout_ms)
 {
 	if (!base_url || !base_url[0])
 		return false;
 
+	/* Tolerate a trailing slash in the configured server URL — operators
+	 * paste "https://example.com/" and "...//api.php" depends on server
+	 * rewrite rules to work. */
+	char base[512];
+	snprintf(base, sizeof(base), "%s", base_url);
+	size_t blen = strlen(base);
+	while (blen > 0 && base[blen - 1] == '/')
+		base[--blen] = '\0';
+
 	char url[1024];
-	snprintf(url, sizeof(url), "%s/api.php%s", base_url, url_suffix);
+	snprintf(url, sizeof(url), "%s/api.php%s", base, url_suffix);
 
 	CURL *curl = curl_easy_init();
 	if (!curl)
@@ -279,8 +303,8 @@ static bool mw_http_post(const char *base_url, const char *url_suffix,
 	} else {
 		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, discard_write);
 	}
-	curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 5000L);
-	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 3000L);
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout_ms);
+	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, timeout_ms / 2);
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
 
@@ -331,36 +355,42 @@ static void *heartbeat_thread_func(void *data)
 		pthread_mutex_unlock(&g_mw.mutex);
 
 		if (enabled && consent && server[0] && name[0]) {
-			int64_t offset_ms = 0;
-			int sync_method = 0;
-			bool synced = false;
-			int64_t raw_offset_ms = 0;
-			int offset_age_sec = -1;
-			bool sync_lost_in_session = false;
-			bool have_offset = ltc_source_get_current_offset(
-				&offset_ms, &sync_method, &synced,
-				&raw_offset_ms, &offset_age_sec,
-				&sync_lost_in_session);
+			ltc_diag_t diag;
+			bool have_offset = ltc_source_get_diag(&diag);
 
-			char body[512];
-			mw_build_heartbeat_body(body, sizeof(body), name,
-						active, have_offset, offset_ms,
-						sync_method, synced,
-						raw_offset_ms, offset_age_sec,
-						PLUGIN_VERSION,
-						sync_lost_in_session);
+			char body[1024];
+			int blen = mw_build_heartbeat_body(
+				body, sizeof(body), name, active, have_offset,
+				diag.raw_offset_ms, diag.sync_method,
+				diag.synced, diag.raw_offset_ms,
+				diag.offset_age_sec, PLUGIN_VERSION,
+				diag.sync_lost_in_session, diag.rtt_ms,
+				diag.applied_delta_ms, diag.initial_skew_ms);
+			if (blen < 0) {
+				/* Never POST a truncated body — the server
+				 * would reject it anyway, and a partial JSON
+				 * string could mislead debugging. */
+				obs_log(LOG_WARNING,
+					"MW heartbeat body build failed "
+					"(display name too long?) — skipping tick");
+				goto sleep_tick;
+			}
 
 			char response[512] = {0};
 			bool ok = mw_http_post(server, "?action=heartbeat",
 					       key, body, response,
-					       sizeof(response));
+					       sizeof(response),
+					       MW_HTTP_TIMEOUT_THREAD_MS);
 
 			if (ok && have_offset) {
 				obs_log(LOG_DEBUG,
-					"MW heartbeat '%s' rec=%d offset=%lldms (age %ds) sync=%d synced=%d",
+					"MW heartbeat '%s' rec=%d offset=%lldms (age %ds, rtt %lldms, delta %+lldms) sync=%d synced=%d",
 					name, active ? 1 : 0,
-					(long long)offset_ms, offset_age_sec,
-					sync_method, synced ? 1 : 0);
+					(long long)diag.raw_offset_ms,
+					diag.offset_age_sec,
+					(long long)diag.rtt_ms,
+					(long long)diag.applied_delta_ms,
+					diag.sync_method, diag.synced ? 1 : 0);
 			} else if (ok) {
 				obs_log(LOG_DEBUG,
 					"MW heartbeat '%s' rec=%d (no LTC source)",
@@ -400,6 +430,7 @@ static void *heartbeat_thread_func(void *data)
 			}
 		}
 
+sleep_tick:;
 		/* Sleep up to 30s but wake on stop_event in 500ms chunks. */
 		unsigned long total_ms =
 			(unsigned long)MW_HEARTBEAT_INTERVAL_SEC * 1000UL;
@@ -422,14 +453,21 @@ static void start_heartbeat_thread(void)
 	if (g_mw.thread_created)
 		return;
 
-	if (os_event_init(&g_mw.stop_event, OS_EVENT_TYPE_MANUAL) != 0)
+	if (os_event_init(&g_mw.stop_event, OS_EVENT_TYPE_MANUAL) != 0) {
+		obs_log(LOG_ERROR,
+			"MW heartbeat: stop event creation failed — no status "
+			"will be reported to the dashboard");
 		return;
+	}
 
 	if (pthread_create(&g_mw.heartbeat_thread, NULL, heartbeat_thread_func, NULL) == 0) {
 		g_mw.thread_created = true;
 	} else {
 		os_event_destroy(g_mw.stop_event);
 		g_mw.stop_event = NULL;
+		obs_log(LOG_ERROR,
+			"MW heartbeat: thread creation failed — no status "
+			"will be reported to the dashboard");
 	}
 }
 
@@ -464,9 +502,16 @@ static void mw_send_start(void)
 		return;
 	}
 
+	char esc_name[320];
+	if (mw_json_escape_string(esc_name, sizeof(esc_name), name) < 0) {
+		obs_log(LOG_WARNING, "MW recording: name not encodable, start signal skipped");
+		return;
+	}
+
 	char body[512];
-	snprintf(body, sizeof(body), "{\"name\":\"%s\",\"camera_id\":\"%c\"}", name, 'A' + cam);
-	mw_http_post(server, "?action=start", key, body, NULL, 0);
+	snprintf(body, sizeof(body), "{\"name\":\"%s\",\"camera_id\":\"%c\"}", esc_name, 'A' + cam);
+	mw_http_post(server, "?action=start", key, body, NULL, 0,
+		     MW_HTTP_TIMEOUT_UI_MS);
 	obs_log(LOG_INFO, "MW recording started: '%s' camera %c", name, 'A' + cam);
 }
 
@@ -485,9 +530,14 @@ static void mw_send_stop(void)
 	if (!server[0] || !name[0])
 		return;
 
+	char esc_name[320];
+	if (mw_json_escape_string(esc_name, sizeof(esc_name), name) < 0)
+		return;
+
 	char body[512];
-	snprintf(body, sizeof(body), "{\"name\":\"%s\",\"camera_id\":\"%c\"}", name, 'A' + cam);
-	mw_http_post(server, "?action=stop", key, body, NULL, 0);
+	snprintf(body, sizeof(body), "{\"name\":\"%s\",\"camera_id\":\"%c\"}", esc_name, 'A' + cam);
+	mw_http_post(server, "?action=stop", key, body, NULL, 0,
+		     MW_HTTP_TIMEOUT_UI_MS);
 	obs_log(LOG_INFO, "MW recording stopped: '%s' camera %c", name, 'A' + cam);
 }
 
@@ -529,9 +579,30 @@ static wchar_t *utf8_to_wide(const char *utf8)
 	if (!utf8 || !utf8[0])
 		return _wcsdup(L"");
 	int len = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
-	wchar_t *w = malloc(len * sizeof(wchar_t));
-	MultiByteToWideChar(CP_UTF8, 0, utf8, -1, w, len);
+	if (len <= 0)
+		return _wcsdup(L"");
+	wchar_t *w = malloc((size_t)len * sizeof(wchar_t));
+	if (!w)
+		return _wcsdup(L"");
+	if (MultiByteToWideChar(CP_UTF8, 0, utf8, -1, w, len) == 0)
+		w[0] = 0;
 	return w;
+}
+
+/* Read a dialog field and convert to UTF-8 into a fixed buffer. On
+ * conversion failure (e.g. the UTF-8 encoding doesn't fit `outsz` — wide
+ * count alone doesn't bound the byte count with umlauts) the buffer is
+ * left as a valid empty string rather than undefined, possibly
+ * unterminated garbage that later snprintf("%s") calls would read past. */
+static void read_dlg_utf8(HWND hwnd, int ctl_id, char *out, size_t outsz)
+{
+	wchar_t wbuf[512];
+	GetDlgItemTextW(hwnd, ctl_id, wbuf, 512);
+	int n = WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, out, (int)outsz,
+				    NULL, NULL);
+	if (n <= 0)
+		out[0] = '\0';
+	out[outsz - 1] = '\0';
 }
 
 /* Dark theme color handler — call from WM_CTLCOLORSTATIC / WM_CTLCOLOREDIT etc. */
@@ -580,8 +651,8 @@ static LRESULT CALLBACK consent_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LPA
 		SendMessageW(title, WM_SETFONT, (WPARAM)hTitleFont, TRUE);
 		y += lh + 18;
 
-		/* Info text: what data is transmitted (10 lines) */
-		int h1 = lh * 10 + 4;
+		/* Info text: what data is transmitted (11 lines) */
+		int h1 = lh * 11 + 4;
 		HWND info1 = CreateWindowW(L"STATIC",
 					   L"Durch die MW-Aufnahme werden folgende Daten\r\n"
 					   L"an den Server \u00FCbermittelt:\r\n"
@@ -592,6 +663,7 @@ static LRESULT CALLBACK consent_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LPA
 					   L"  \u2022  Zeitstempel (Start, Stop, Heartbeat)\r\n"
 					   L"  \u2022  Plugin-Version (Support-Erkennung veralteter Installationen)\r\n"
 					   L"  \u2022  Sync-Status (Drift in ms, Sync-Methode, Alter)\r\n"
+					   L"  \u2022  Sync-Detaildaten (Leitungsqualit\u00E4t/RTT, TC-Restabweichung, Uhr-Fehler beim Start)\r\n"
 					   L"  \u2022  Sync-Verlust-Marker (f\u00FCr Post-Production)",
 					   WS_CHILD | WS_VISIBLE | SS_LEFT, x, y, w, h1, hwnd, NULL, NULL, NULL);
 		SendMessageW(info1, WM_SETFONT, (WPARAM)hFont, TRUE);
@@ -917,20 +989,14 @@ static LRESULT CALLBACK settings_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LP
 
 	case WM_COMMAND:
 		if (LOWORD(wParam) == IDC_SAVE) {
-			wchar_t wbuf[512];
-
 			pthread_mutex_lock(&g_mw.mutex);
 
-			GetDlgItemTextW(hwnd, IDC_SERVER_URL, wbuf, 512);
-			WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, g_mw.server_url, sizeof(g_mw.server_url), NULL,
-					    NULL);
-
-			GetDlgItemTextW(hwnd, IDC_USER_NAME, wbuf, 100);
-			WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, g_mw.user_name, sizeof(g_mw.user_name), NULL,
-					    NULL);
-
-			GetDlgItemTextW(hwnd, IDC_API_KEY, wbuf, 256);
-			WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, g_mw.api_key, sizeof(g_mw.api_key), NULL, NULL);
+			read_dlg_utf8(hwnd, IDC_SERVER_URL, g_mw.server_url,
+				      sizeof(g_mw.server_url));
+			read_dlg_utf8(hwnd, IDC_USER_NAME, g_mw.user_name,
+				      sizeof(g_mw.user_name));
+			read_dlg_utf8(hwnd, IDC_API_KEY, g_mw.api_key,
+				      sizeof(g_mw.api_key));
 
 			int new_cam = (int)SendDlgItemMessageW(hwnd, IDC_CAMERA_ID, CB_GETCURSEL, 0, 0);
 			if (new_cam < 0) new_cam = 0;
@@ -1031,9 +1097,14 @@ static bool ensure_consent(void)
 		g_mw.consent_version = MW_CURRENT_CONSENT_VERSION;
 		save_config();
 
-		char body[512];
-		snprintf(body, sizeof(body), "{\"name\":\"%s\",\"consent\":true}", name);
-		mw_http_post(server, "?action=consent", key, body, NULL, 0);
+		char esc_name[320];
+		if (mw_json_escape_string(esc_name, sizeof(esc_name), name) >= 0) {
+			char body[512];
+			snprintf(body, sizeof(body),
+				 "{\"name\":\"%s\",\"consent\":true}", esc_name);
+			mw_http_post(server, "?action=consent", key, body,
+				     NULL, 0, MW_HTTP_TIMEOUT_UI_MS);
+		}
 
 		obs_log(LOG_INFO, "MW recording: user '%s' gave consent (v%d)",
 			name, MW_CURRENT_CONSENT_VERSION);
@@ -1062,6 +1133,18 @@ static bool ensure_consent(void)
 static void on_frontend_event(enum obs_frontend_event event, void *data)
 {
 	(void)data;
+
+	/* TICKET-063: as soon as recording stops, ask each LTC source to
+	 * apply the current NTP target offset instantly on the next idle
+	 * frame, instead of slewing. Fixes the "50 s offset persists across
+	 * takes" bug (TICKET-059). This is purely local — nothing is
+	 * transmitted — so it must run for EVERY camera, before the
+	 * enabled/consent gates below. When it only ran for MW-enabled
+	 * cameras, mixed setups drifted apart: corrected cameras snapped to
+	 * NTP between takes while unconfigured ones kept their stale
+	 * offset, making relative sync WORSE than no correction at all. */
+	if (event == OBS_FRONTEND_EVENT_RECORDING_STOPPED)
+		ltc_source_signal_recording_stopped();
 
 	if (!g_initialized || !g_mw.enabled)
 		return;
@@ -1092,17 +1175,6 @@ static void on_frontend_event(enum obs_frontend_event event, void *data)
 		bool was_active = g_mw.recording_active;
 		g_mw.recording_active = false;
 		pthread_mutex_unlock(&g_mw.mutex);
-
-		/* TICKET-059: as soon as recording stops, ask each LTC source
-		 * to apply the current NTP target offset instantly on the next
-		 * idle frame, instead of slewing at 10 ms/frame. Fixes the
-		 * "50 s offset persists across takes" bug — slewing alone
-		 * cannot close a multi-second clock-skew gap in a normal
-		 * between-takes window, so without this the next recording
-		 * would start with a still-wrong applied offset. The jump
-		 * happens while no file is being written, so no LTC
-		 * discontinuity ends up on disk. */
-		ltc_source_signal_recording_stopped();
 
 		if (was_active) {
 			mw_send_stop();

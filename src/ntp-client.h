@@ -72,6 +72,30 @@ bool ntp_query(const char *server, int timeout_ms, ntp_result_t *result);
 void ntp_corrected_time(int64_t offset_ms, int64_t *out_sec, int64_t *out_usec);
 
 /*
+ * Pick the most trustworthy measurement out of `count` samples: the one
+ * with the lowest roundtrip time.
+ *
+ * Rationale: the cameras sit on heterogeneous consumer connections all
+ * over Germany. A single SNTP sample's offset error is bounded by
+ * ±roundtrip/2 (path asymmetry — DSL/cable uplinks are slower than the
+ * downlink, and bufferbloat inflates the RTT by whole seconds while
+ * anything else in the household is uploading). Minimising the RTT
+ * therefore directly minimises the worst-case offset error, without any
+ * assumption about the local clock (which may legitimately step, e.g.
+ * when the Windows time service kicks in — history-based outlier
+ * rejection would wrongly suppress such a real correction).
+ *
+ * Samples with success == false are ignored. Samples with
+ * roundtrip_ms > max_rtt_ms are ignored (pass max_rtt_ms <= 0 to
+ * disable the cap).
+ *
+ * Returns the index of the best usable sample, or -1 if none qualifies.
+ * Pure function; no side effects (testable without network).
+ */
+int ntp_select_best_sample(const ntp_result_t *samples, int count,
+			   int64_t max_rtt_ms);
+
+/*
  * Move `applied_ms` one step toward `target_ms`, clamped to ±max_step_ms.
  * Returns the new applied value. Pure arithmetic; no side effects.
  *

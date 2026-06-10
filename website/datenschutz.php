@@ -45,7 +45,7 @@ require_once __DIR__ . '/includes/config.php';
                 MW Aufnahme-System &ndash; Informationen zum Datenschutz gemäß DSGVO
             </p>
             <p style="color: #888; font-size: 0.85rem; margin-top: 3px;">
-                Stand: 23.05.2026 (Version 2)
+                Stand: 10.06.2026 (Version 3)
             </p>
         </header>
 
@@ -53,11 +53,15 @@ require_once __DIR__ . '/includes/config.php';
 
             <div style="background: #4a3a00; border-left: 4px solid #ffd54f; padding: 12px 16px; margin: 16px 0; border-radius: 4px;">
                 <p style="margin: 0; color: #ffd54f;">
-                    <strong>Aktualisierung 23.05.2026:</strong>
-                    Mit Plugin-Version&nbsp;0.6.0 werden zus&auml;tzliche
-                    technische Felder im Heartbeat &uuml;bermittelt
-                    (<em>Plugin-Version</em>, <em>Sync-Status</em>,
-                    <em>Sync-Verlust-Marker</em> &ndash; siehe Abschnitt&nbsp;3).
+                    <strong>Aktualisierung 10.06.2026:</strong>
+                    Mit Plugin-Version&nbsp;0.6.3 werden zus&auml;tzliche
+                    technische Sync-Detailfelder im Heartbeat &uuml;bermittelt
+                    (<em>Leitungsqualit&auml;t/RTT</em>,
+                    <em>Timecode-Restabweichung</em>,
+                    <em>PC-Uhr-Fehler beim Start</em> &ndash; siehe
+                    Abschnitt&nbsp;3; erg&auml;nzend zu den mit 0.6.0
+                    eingef&uuml;hrten Feldern <em>Plugin-Version</em>,
+                    <em>Sync-Status</em>, <em>Sync-Verlust-Marker</em>).
                     Beim n&auml;chsten Plugin-Start wird daher
                     erneut um deine Einwilligung gebeten.
                 </p>
@@ -173,6 +177,20 @@ require_once __DIR__ . '/includes/config.php';
                             Post-Production zur Identifikation von potentiell
                             unsynchronen Aufnahmen ben&ouml;tigt.</td>
                         <td>&bdquo;true / false&ldquo;</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Sync-Detaildaten</strong></td>
+                        <td>Drei technische Messwerte zur Ferndiagnose von
+                            Sync-Problemen: die Netzwerk-Laufzeit der
+                            Zeitmessung (RTT &ndash; zeigt eine gerade
+                            ausgelastete Internetleitung), die aktuelle
+                            Restabweichung des aufgezeichneten Timecodes vom
+                            Messziel und ein einmalig beim Start erkannter
+                            Fehler der PC-Uhr. Keine Inhalte, keine
+                            besuchten Seiten, keine Ger&auml;tedaten &ndash;
+                            ausschlie&szlig;lich Zeitsync-Qualit&auml;t.</td>
+                        <td>&bdquo;RTT 18&nbsp;ms / TC-Abw. +3&nbsp;ms /
+                            Uhr-Fehler 0&nbsp;ms&ldquo;</td>
                     </tr>
                     <tr>
                         <td><strong>Plugin-Version</strong></td>

@@ -82,6 +82,16 @@ if(APPLE)
   )
 endif()
 
+# Linux: libltc.so is dynamically linked and deployed next to the plugin .so
+# (see install.sh). $ORIGIN makes the loader look in the plugin's own
+# directory, so no system-wide install or LD_LIBRARY_PATH is required.
+if(UNIX AND NOT APPLE)
+  set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES
+    INSTALL_RPATH "$ORIGIN"
+    BUILD_WITH_INSTALL_RPATH TRUE
+  )
+endif()
+
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
 
 # Tests

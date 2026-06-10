@@ -34,6 +34,25 @@ extern "C" {
 #endif
 
 /*
+ * JSON-escape `src` into `dst`: `"` and `\` get backslash-escaped,
+ * \n / \r / \t use their short forms, all other control characters
+ * (< 0x20) become \u00XX. UTF-8 multibyte sequences pass through
+ * unchanged (JSON is UTF-8 native).
+ *
+ * Why this exists: user-controlled strings (the display name from the MW
+ * settings dialog, file paths in the metadata sidecar) end up inside
+ * hand-built JSON. One unescaped quote produces invalid JSON — the server
+ * rejects the request with 400 BEFORE any server-side sanitization runs,
+ * so the camera silently vanishes from the dashboard with no hint to the
+ * operator.
+ *
+ * Returns the number of characters written (excluding the terminator), or
+ * -1 if dst is too small (dst is still null-terminated then). NULL src is
+ * treated as an empty string.
+ */
+int mw_json_escape_string(char *dst, size_t dstsz, const char *src);
+
+/*
  * Build the heartbeat JSON body into `buf`.
  *
  * The output shape MUST stay in sync with what the PHP API expects in
@@ -43,9 +62,10 @@ extern "C" {
  *   {"name":"<n>","recording_active":<bool>,"offset_ms":<i64>,"sync_method":<int>,"synced":<bool>,"raw_offset_ms":<i64>,"offset_age_sec":<int>[,"plugin_version":"<v>"],"sync_lost_in_session":<bool>}
  *
  * Notes:
- *   - `name` is inserted verbatim — the caller is responsible for any escaping.
- *     In practice MW names come from the user-controlled config dialog and are
- *     sanitized server-side (PHP `sanitize_name`), so we mirror that boundary.
+ *   - `name` is JSON-escaped internally (see mw_json_escape_string) — a
+ *     display name containing a quote must not invalidate the whole body.
+ *     Server-side PHP `sanitize_name` additionally strips disallowed
+ *     characters, but that only runs AFTER json_decode succeeds.
  *   - When `have_offset == false`, the offset fields are omitted entirely
  *     (old plugins talking to new servers get sensible defaults).
  *   - `raw_offset_ms` mirrors `offset_ms` today (both report the latest raw
@@ -65,6 +85,12 @@ extern "C" {
  *     so the dashboard can clear a previously shown red marker. true means
  *     the plugin observed `recording_active && consecutive_sync_failures
  *     >= 3` at least once since the source was created.
+ *   - `rtt_ms`, `applied_delta_ms`, `initial_skew_ms` (TICKET-075) ride
+ *     inside the have_offset block: roundtrip of the accepted NTP sample
+ *     (line quality, offset uncertainty ≤ ±rtt/2), live distance between
+ *     the recorded timecode and the measured target (0 = converged), and
+ *     the PC clock error found at the first sync (0 = none). Disclosed in
+ *     datenschutz.php; transmitting them requires consent version >= 3.
  *
  * Returns the number of characters written (excluding the null terminator),
  * or -1 on truncation/error. Buf is always null-terminated when bufsz > 0.
@@ -79,7 +105,10 @@ int mw_build_heartbeat_body(char *buf, size_t bufsz,
 			    int64_t raw_offset_ms,
 			    int offset_age_sec,
 			    const char *plugin_version,
-			    bool sync_lost_in_session);
+			    bool sync_lost_in_session,
+			    int64_t rtt_ms,
+			    int64_t applied_delta_ms,
+			    int64_t initial_skew_ms);
 
 /*
  * Detect a director-issued re-sync command in the API response.

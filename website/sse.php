@@ -59,7 +59,8 @@ while (true) {
                     s.last_heartbeat, s.offset_ms, s.sync_method,
                     s.pending_resync, s.last_recording_active,
                     s.plugin_version, s.offset_age_sec,
-                    s.sync_lost_in_session
+                    s.sync_lost_in_session,
+                    s.rtt_ms, s.applied_delta_ms, s.initial_skew_ms
              FROM sessions s
              INNER JOIN (
                  SELECT user_name, MAX(id) as max_id

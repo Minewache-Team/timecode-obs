@@ -1261,6 +1261,427 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 - **Files:** `src/mw-recording.c`, `website/includes/db.php`,
   `buildspec.json`, `PROJECT.md`.
 
+#### TICKET-063: Drift correction applied inconsistently across cameras + slew-rate math error
+- **Status:** `DONE` (shipped as 0.6.3)
+- **Depends on:** TICKET-040, TICKET-059
+- **Type:** Bug / Sync hardening
+- **Description:** Cutter field report (2026-06): clips recorded at 30 fps
+  showed large offsets in DaVinci Resolve that got WORSE after TC sync.
+  Three root causes found:
+  1. **TICKET-059's between-takes offset jump was gated on MW Aufnahme.**
+     `ltc_source_signal_recording_stopped()` was called inside
+     `on_frontend_event` AFTER the `if (!g_mw.enabled) return;` guard. Cameras
+     without MW configured/enabled never applied the NTP target between
+     takes — so in a mixed fleet, some cameras snapped to correct time
+     between takes while others kept a stale applied offset for the whole
+     shoot. Relative sync across cameras became worse than before the
+     drift-correction existed. Fix: the call now runs before the
+     enabled/consent gates (it is purely local, transmits nothing).
+  2. **Recording slew rate was 1000× too fast.** `SLEW_MS_PER_FRAME_RECORDING=1`
+     was documented as "25 ppm @ 25 fps" but 1 ms per FRAME is 25 ms per
+     second = 25,000 ppm (30,000 ppm at 30 fps). Any take that started with
+     a stale applied offset got up to 30 ms of timecode correction per
+     second of media baked into the file — a non-linear TC ramp. Resolve
+     aligns at one TC point, then the material visibly drifts apart over
+     the clip ("offsets get worse after sync"). Fix: while recording the
+     applied offset now steps 1 ms per 40 s of encoded media (= 25 ppm,
+     truly within the ±50 ppm hardware LTC tolerance), gated by a frame
+     counter. Convergence between takes is handled by the (now ungated)
+     instant-apply edge.
+  3. **Hard TC jump mid-recording after sync loss + recovery.** The NTP
+     thread resets `first_sync_done` after 3 consecutive failures; the
+     encoder treated `!first_sync_done` as "apply target instantly" without
+     checking recording state, so the next successful measurement after a
+     ~network blip landed as a hard jump inside the file — violating the
+     TICKET-008/036 contract. Fix: instant apply only when not recording;
+     also, `ntp_sync_recovered_edge` is now only consumed when it can be
+     applied (previously it was cleared even while recording, losing the
+     edge).
+  Bonus fix: `obs_frontend_recording_active()` in `ntp_sync_thread`
+  (TICKET-043 block) was not guarded by `#ifdef ENABLE_FRONTEND_API` —
+  builds with the frontend API disabled failed to link.
+- **Acceptance Criteria:**
+  - [x] `ltc_source_signal_recording_stopped()` fires on RECORDING_STOPPED
+        regardless of MW enabled/consent state.
+  - [x] Recording slew rate ≤ 25 ppm (1 ms per 40 s of media).
+  - [x] No instant offset apply while a recording is active (neither via
+        `!first_sync_done` nor via the recovery edge).
+  - [x] Recovery edge survives until the first idle frame.
+  - [x] TICKET-043 block compiles with `ENABLE_FRONTEND_API=OFF`.
+  - [x] All ctest suites pass.
+- **Files:** `src/ltc-source.c`, `src/mw-recording.c`, `buildspec.json`.
+
+#### TICKET-064: Camera IDs I–P (8–15) never written to LTC User Bits
+- **Status:** `DONE` (shipped as 0.6.3)
+- **Depends on:** TICKET-032
+- **Type:** Bug
+- **Description:** TICKET-032 expanded the camera dropdown to A–P (0–15),
+  but `ltc_wrapper_set_timecode()` still guarded the user-bits write with
+  `camera_id <= 7`. For cameras I–P the `user7` field was silently left at
+  whatever the date encoding produced — wrong/garbage camera ID in every
+  recording from those cameras since 0.4.0. Fix: guard widened to 15;
+  header doc updated; regression test added (roundtrip with ids 8 and 15).
+- **Acceptance Criteria:**
+  - [x] `camera_id` 0–15 all reach `user7`.
+  - [x] New gtest `CameraIDUpperRangeRoundtrip` passes.
+- **Files:** `src/ltc-encoder-wrapper.c/h`, `tests/test-ltc-roundtrip.cpp`.
+
+#### TICKET-065: Linux libltc deployment missing (plugin fails to load)
+- **Status:** `DONE` (0.6.3)
+- **Type:** Bug / Build
+- **Description:** libltc is dynamically linked (SHARED, LGPLv3 — TICKET-024).
+  `install.ps1` copies `libltc.dll` next to the plugin, the Inno Setup
+  installer ships it, but `install.sh` (Linux) never copied `libltc.so` —
+  so a Linux user running the documented install got a plugin that OBS
+  silently fails to load (unresolved `libltc.so`). Two-part fix:
+  1. `install.sh` now copies `libltc.so*` into `bin/64bit` next to the
+     plugin and verifies its presence (fails the install if missing).
+  2. `CMakeLists.txt` sets `INSTALL_RPATH "$ORIGIN"` +
+     `BUILD_WITH_INSTALL_RPATH` on Linux (mirroring the existing macOS
+     `@loader_path/../Frameworks` block) so the loader finds libltc next
+     to the plugin without a system-wide install or `LD_LIBRARY_PATH`.
+- **Files:** `install.sh`, `CMakeLists.txt`.
+
+#### TICKET-066: CI test step could never fail the build
+- **Status:** `DONE` (0.6.3)
+- **Type:** Infrastructure
+- **Description:** The `Run Tests 🧪` step on all three platforms carried
+  `continue-on-error: true` (TICKET-045, intended as a 0.6.0-only measure
+  with a documented "flip to blocking once proven" follow-up). The result:
+  a regression that turns a test red still uploads a green release
+  artifact. Removed `continue-on-error` from all three jobs so ctest
+  failures now block the pipeline. Suites are network-free (parser/mock
+  only), so there is no flake risk.
+- **Files:** `.github/workflows/build-project.yaml`.
+
+#### TICKET-067: Scene collection used a dead settings key
+- **Status:** `DONE` (0.6.3)
+- **Type:** Bug
+- **Description:** The `[MW] OBS KIT` LTC source stored
+  `"ntp_sync_interval": 5`, but the plugin reads the key `sync_interval`
+  (seconds). The configured value was silently ignored (fell back to the
+  300 s default), and `5` would have meant 5 *seconds* — hammering NTP —
+  had the key been right. Renamed to `sync_interval: 300` and added
+  explicit `audio_track: 3` + `camera_id: 0` so the template is
+  self-documenting and matches the plugin's setting keys.
+- **Files:** `[MW] OBS KIT/Minewache-New.json`.
+
+#### TICKET-068: Website — double-escaped scene names + unsafe onclick encoding + open install.php
+- **Status:** `DONE` (0.6.3)
+- **Type:** Bug / Hardening (website)
+- **Description:** Three dashboard issues:
+  1. **Double HTML-encoding.** `scene-save.php` ran `htmlspecialchars()`
+     on `scene_name` *before* storing it, and `scenes.php` escapes again
+     on output. A name like `A&B` was stored as `A&amp;B` and shown as
+     `A&amp;B`. Fix: store raw, escape only on output (now consistent
+     with how `notes` was already handled).
+  2. **Wrong encoding in JS handler.** `scenes.php` built the delete
+     button with `addslashes(htmlspecialchars($scene_name))` — mixing an
+     SQL-escaping helper into a JS-string-in-HTML-attribute context.
+     Replaced with `htmlspecialchars(json_encode(...), ENT_QUOTES)`, the
+     correct two-layer (JS literal + HTML attribute) encoding.
+  3. **`install.php` re-runnable in production.** It executed
+     `CREATE TABLE` / `ALTER TABLE` for any unauthenticated visitor.
+     Added a `.install_complete` marker guard: after a successful run the
+     script refuses further runs until the admin removes the marker (or
+     the file). Exempted under `MW_TEST_MODE` so the PHPUnit bootstrap,
+     which re-applies the schema to a fresh `_test` DB each run, is
+     unaffected.
+- **Files:** `website/scene-save.php`, `website/scenes.php`,
+  `website/install.php`.
+
+#### TICKET-069: Non-functional Properties status display + stale/mislabelled sidecar metadata
+- **Status:** `DONE` (0.6.3)
+- **Type:** Bug (functional, non-security)
+- **Description:** Audit of the user-facing data paths turned up three
+  things that looked implemented but weren't:
+  1. **Properties status/timecode were never shown.** `get_properties`
+     passed the static labels `obs_module_text("NTPStatus")` /
+     `"CurrentTimecode"` as the info-text, so the operator saw the words
+     "NTP Status" and "Current Timecode" instead of the actual sync state
+     and running timecode. The timecode string was even computed into
+     `tc_buf` and then discarded. Now both render live snapshots (rebuilt
+     each time the dialog opens), wiring up the previously-dead locale keys
+     `NTPSynced` / `HTTPSynced` / `NTPNotSynced`.
+  2. **Sidecar sync fields were always stale.** `metadata_writer_set_info`
+     only runs on a settings change, so the `.ltc.json` reported the
+     create-time values (`ntp_synced=false`, `ntp_offset_ms=0`) for every
+     recording regardless of the real sync state — useless as the audit
+     trail TICKET-019 intended. `write_sidecar_end` now refreshes those
+     fields from the live source via `ltc_source_get_current_offset()`.
+  3. **Sidecar framerate mislabelled 29.97 as "30".** It wrote
+     `nominal_fps` ("30") for drop-frame — the exact 29.97-vs-30 mixup
+     that breaks DaVinci Resolve multi-cam sync. New `fps_label_str()`
+     reports "29.97" for `TC_FPS_29_97_DF`.
+  Also removed dead code: the unused `write_sidecar_start()` function and
+  the no-op `obs_frontend_get_current_record_output_path()` fetch in the
+  RECORDING_STARTED handler (the final filename is only known at stop, so
+  the complete sidecar is written in one shot then).
+- **Files:** `src/ltc-source.c`, `src/metadata-writer.c`.
+
+#### TICKET-070: Use-case logic audit — audio-timeline drift, dead-network cold start, drop-frame duplicates, dashboard cry-wolf
+- **Status:** `DONE` (0.6.3)
+- **Type:** Bug (logic; each looks correct until run against the field use case)
+- **Description:** Four bugs whose code reads plausibly but breaks under
+  real shoot conditions (decentralized home networks across Germany,
+  evening sessions, PCs booting faster than routers):
+  1. **Periodic gap in the LTC track.** `video_tick` truncated
+     `(int)(seconds * SAMPLE_RATE)` per tick, losing ~0.5 samples/tick on
+     average. The audio timeline drifted behind real time ~0.6 ms/s until
+     the 200 ms safety resync fired — a timestamp jump (= LTC dropout +
+     up-to-200 ms wobble against the voice/game tracks) roughly every
+     5 minutes in every recording. Fixed with a fractional-sample
+     accumulator (`sample_accum`); the 200 ms reset remains for genuine
+     stalls, and a long-stall cap drops backlog instead of bursting it.
+     Also removed the fabricated `SAMPLE_RATE/30` output on zero-length
+     ticks (audio that corresponded to no elapsed time).
+  2. **Cold-start burst wasted on a dead network.** TICKET-049's fast
+     cycles (3×2 s, 2×10 s) ran on a wall-clock schedule, so when OBS
+     started before the WiFi/router was up (the common field sequence),
+     all burst cycles failed and the next attempt waited a full
+     `sync_interval_sec` (default 5 min) — recordings could start with
+     raw local-clock TC. Now: while `first_sync_done` is false the thread
+     retries at burst pace (a fully failed chain itself takes ~30 s, so
+     no server hammering), and `cycle_count` resets on the first success
+     so the stabilisation measurements still happen.
+  3. **Drop-frame emitted duplicate labels.** The wall-clock-at-nominal-30
+     mapping with a 0/1→2 clamp produced the same label up to three times
+     at every non-10th minute boundary (nominal numbering runs 0.1% fast,
+     the clamp re-aligned in one step) — LTC decoders/NLEs see a stalled
+     TC and lose lock. Replaced with the standard SMPTE 12M renumbering
+     (count elapsed 29.97 frame periods since midnight, skip :00/:01
+     labels per minute except every 10th). Labels now advance strictly
+     (+1, or +3 in nominal index space at drop points) and deviate from
+     the wall clock by at most the defined ~2 frames. Tests updated to
+     canonical expectations + new monotonicity test across a drop
+     boundary.
+  4. **Dashboard staleness thresholds contradicted the sync interval.**
+     "Letzte Sync" turned orange at 180 s while the default (and
+     template) sync interval is 300 s — every healthy camera cycled
+     green→orange, training the director to ignore orange. Thresholds now
+     interval-aware: green < 330 s (one full cycle + slack), orange
+     < 630 s (one missed cycle), red beyond.
+  Also added `LTCRoundtripTest.SetTimecodeEveryFrameIsContinuous`: the
+  production encode path (set_timecode before EVERY frame, TICKET-040)
+  had no decode-continuity coverage — the existing continuity test only
+  exercised the no-longer-used `inc_timecode` path. The new test confirms
+  the per-frame set_timecode stream decodes as a strict +1 sequence
+  (test feeds the decoder frame-by-frame; its internal queue holds only
+  32 frames).
+- **Files:** `src/ltc-source.c`, `src/timecode.c`,
+  `tests/test-timecode.cpp`, `tests/test-ltc-roundtrip.cpp`,
+  `website/assets/app.js`.
+
+#### TICKET-071: Network-quality safeguards for NTP sampling (consumer-uplink reality)
+- **Status:** `DONE` (0.6.3)
+- **Type:** Feature (sync hardening)
+- **Description:** The plugin's entire value is trustworthy time over
+  decentralized consumer internet connections — but the NTP path was
+  naive about exactly those networks: `ntp_query` computes the roundtrip
+  time and then threw it away. A single SNTP sample's offset error is
+  bounded by ±RTT/2 (path asymmetry); on DSL/cable uplinks with
+  bufferbloat (anyone in the household uploading), RTT spikes to whole
+  seconds — and that one bad measurement became the sync target
+  unfiltered, potentially pulling the timecode by ±1 s.
+  Safeguards (classic `ntpdate` pattern):
+  1. **Min-RTT sampling.** Per server up to `NTP_SAMPLES_PER_SERVER` (3)
+     measurements, 250 ms apart (decorrelates bufferbloat bursts); the
+     minimum-RTT sample wins — that directly minimises the worst-case
+     offset error. Early exit as soon as a sample is below
+     `NTP_RTT_GOOD_MS` (150 ms).
+  2. **Quality-aware chain.** The server chain (user → cloudflare →
+     google) no longer stops at the first *response* but at the first
+     *good* response; a merely acceptable sample is only used after every
+     server had a chance to beat it ("best of chain").
+  3. **Hard cap.** Samples above `NTP_RTT_HARD_MAX_MS` (3 s) are
+     discarded outright. If the whole chain only yields garbage-RTT, the
+     existing HTTP/degraded path takes over. (Best-of-chain rationale
+     corrected in TICKET-072: the realistic worst case is not exotic
+     uplinks but the normal German residential line under evening load —
+     DOCSIS upstream congestion / DSL bufferbloat can hold ALL servers
+     above the GOOD threshold for minutes.)
+  4. **Honest logging.** Accepting a >150 ms sample logs a warning with
+     the concrete uncertainty bound ("Busy uplink — upload/stream
+     running?") so a field operator can act on it.
+  Deliberately NOT added: history-based outlier rejection — the local
+  clock may legitimately step (Windows time service, manual fix), and a
+  "this offset differs too much from the last one" filter would suppress
+  exactly those real corrections. RTT bounds the error without any
+  assumption about the clock.
+  Pure helper `ntp_select_best_sample()` in `ntp-client.c` (testable
+  core, no OBS deps), 7 new unit tests.
+- **Files:** `src/ntp-client.{c,h}`, `src/ltc-source.c`,
+  `tests/test-ntp-offset.cpp`.
+
+#### TICKET-072: General hardening (protocol, encoding, silent failures, German-residential network model)
+- **Status:** `DONE` (0.6.3)
+- **Type:** Hardening
+- **Description:** Cross-cutting robustness pass over the plugin:
+  1. **JSON encoding of user strings.** A display name containing `"`
+     produced invalid JSON in heartbeat/start/stop/consent bodies; the
+     server rejects that with 400 *before* its `sanitize_name` runs, so
+     the camera silently disappears from the dashboard. New pure helper
+     `mw_json_escape_string()` (escapes `"` `\` and control chars,
+     UTF-8 passthrough); used for the name in all bodies. The heartbeat
+     thread now also checks `mw_build_heartbeat_body()`'s return value
+     and skips the tick instead of POSTing a truncated body.
+  2. **SNTP protocol hardening** (`ntp-client.c`):
+     - UDP socket is `connect()`ed — the kernel drops datagrams from
+       any other source, and ICMP port-unreachable fails fast instead
+       of burning the full timeout.
+     - Request carries T1 in the transmit timestamp; the response's
+       originate timestamp must echo it (RFC 4330 nonce) — stale,
+       duplicated or off-path-spoofed answers are dropped.
+     - NTP era handling (2036 rollover) via MSB heuristic — valid to
+       ~2104 instead of breaking in ten years.
+     - Garbage-server floor: a transmit time before 2020 is rejected
+       (a broken server must never yank the TC by years).
+     - **`AF_UNSPEC` instead of forced `AF_INET`** with address-list
+       walking: on DS-Lite lines (large share of German cable
+       connections) IPv4 is tunneled through the provider CGNAT with
+       extra latency/jitter while native IPv6 goes direct — the code
+       previously forced the worse path. Unroutable families fail at
+       `connect()` and fall through to the next address.
+  3. **Evening-congestion follow-up:** a cycle that only achieved a
+     mediocre sample (> GOOD RTT) re-measures after ≤ 60 s instead of
+     the full sync interval — quiet moments on a loaded residential
+     line come and go within minutes.
+  4. **Silent failure paths now log loudly:** NTP thread/event creation
+     failure (TC would free-run forever), LTC encoder creation failure
+     (source would output pure silence), heartbeat thread creation
+     failure.
+  5. **Metadata sidecar:** extension replacement now only looks for the
+     dot in the basename (a dot in a directory name previously produced
+     a sidecar in the wrong place under a wrong name); path and NTP
+     server name are JSON-escaped; camera_id clamped.
+  6. **Win32 robustness:** `utf8_to_wide()` checks malloc/conversion
+     failure; dialog-field reads go through `read_dlg_utf8()` which
+     guarantees a terminated (possibly empty) string when the UTF-8
+     encoding exceeds the target buffer — previously the buffer could
+     be left as unterminated garbage that later `%s` reads walked past.
+     `mw_http_post()` tolerates a trailing slash in the configured
+     server URL.
+- **Tests:** 7 new cases (`JsonEscapeString.*`,
+  `BuildHeartbeatBody.QuoteInNameProducesValidEscapedJson`).
+- **Files:** `src/mw-recording-helpers.{c,h}`, `src/mw-recording.c`,
+  `src/ntp-client.c`, `src/ltc-source.c`, `src/metadata-writer.c`,
+  `tests/test-mw-helpers.cpp`.
+
+#### TICKET-073: Shared-family-line refinements (ABR-burst-aware sampling, heartbeat timeouts)
+- **Status:** `DONE` (0.6.3)
+- **Type:** Hardening (network model refinement)
+- **Description:** User clarification: the lines are FAMILY connections —
+  "die Schwester streamt gerade Netflix" is the normal operating
+  condition, not an anomaly. Two consequences:
+  1. **ABR-burst-aware NTP sampling.** Streaming players (Netflix/
+     YouTube/Twitch) don't saturate the line continuously — they burst
+     one segment every few seconds at full line rate and idle in
+     between. The previous 250 ms gap between the three NTP samples
+     meant all of them landed inside the same burst (or the same idle
+     window), so min-RTT selection had nothing better to choose from.
+     `NTP_SAMPLE_GAP_MS` raised to 2000: three samples now span ~4.5 s,
+     making it likely at least one falls into a burst pause and measures
+     the real path. Costs time only when quality is already bad (a GOOD
+     first sample still exits immediately). Note: downstream congestion
+     (streaming) delays the NTP *response*, upstream congestion (upload)
+     the request — the offset bias direction differs, but both are
+     bounded by ±RTT/2, so min-RTT selection handles both identically.
+  2. **Heartbeat timeouts for congested lines.** Under household load,
+     TCP+TLS setup alone can exceed the previous 3 s connect timeout —
+     one failed POST puts a 60 s gap into `last_heartbeat` and the
+     camera flaps "offline" on the dashboard while recording fine.
+     `mw_http_post` now takes a timeout parameter:
+     10 s on the heartbeat thread (harmless vs. the 30 s interval),
+     5 s (status quo) for start/stop/consent which run on the OBS
+     frontend/UI thread where every blocked second is a frozen UI.
+     The UI-thread blocking itself (synchronous curl in a frontend
+     event callback) is a pre-existing design wart — async dispatch is
+     a candidate for a future ticket.
+- **Files:** `src/ltc-source.c`, `src/mw-recording.c`.
+
+#### TICKET-074: Discord-support-grade user surface (German locale, support line, dialog mojibake)
+- **Status:** `DONE` (0.6.3)
+- **Type:** UX / Supportability
+- **Description:** Operating reality (user): many operators are
+  completely non-technical, but they sit in Discord WITH the developer
+  and director while using the plugin. The support flow is therefore
+  "user screenshots/pastes something into Discord, developer diagnoses
+  remotely" — and the plugin's user-visible surface must serve exactly
+  that flow:
+  1. **German locale (`data/locale/de-DE.ini`).** The entire fleet is
+     German and non-technical; warnings shown only in English are as
+     good as no warnings. German OBS installs pick the locale up
+     automatically (OBS falls back to en-US otherwise). All installers
+     already deploy `data/` recursively — no packaging changes needed.
+  2. **Actionable warnings.** `NTPDegradedWarning`, `NTPNotSynced` and
+     `TrackNotRecorded` now tell the user WHAT TO DO ("SOFORT im
+     Discord melden", "VOR der Aufnahme im Discord melden") instead of
+     only describing the condition in technical terms.
+  3. **Diagnosis-grade status line.** The Properties sync status now
+     includes measurement age and RTT
+     ("Zeit synchron (NTP) — Abweichung +12 ms (gemessen vor 23 s,
+     RTT 18 ms)") — a screenshot of the panel answers the first three
+     questions the developer would otherwise have to ask.
+  4. **Support line for copy/paste.** New `_support_info` text property:
+     one dense line ("obs-ltc-timecode v0.6.3 | Cam C | 30 fps |
+     Track 3 | NTP +12 ms @23s RTT 18 ms | TC 14:33:12:05") explicitly
+     labelled "diese Zeile in den Discord posten". Version, camera, fps,
+     track, sync method/offset/age/RTT and current TC in one screenshot.
+  5. **Dialog mojibake fixed.** `auto-setup.c` used `MessageBoxA` with
+     UTF-8 umlauts in the strings — German Windows rendered "MÃ¶chtest".
+     Migrated to `MessageBoxW` with `\u` escapes (the same TICKET-030
+     migration the MW dialogs already got). A garbled first-run dialog
+     is exactly what a nervous non-technical user screenshots into
+     Discord, and it destroys trust in the whole setup.
+- **Files:** `data/locale/en-US.ini`, `data/locale/de-DE.ini` (new),
+  `src/ltc-source.c`, `src/auto-setup.c`.
+
+#### TICKET-075: Maximal remote diagnostics for developer/director
+- **Status:** `DONE` (0.6.3)
+- **Type:** Feature (supportability — counterpart to TICKET-074)
+- **Description:** TICKET-074 made the operator surface dumb-user-simple;
+  this ticket gives the developer/director the opposite: maximum data on
+  every remote channel, all fed from one source of truth.
+  1. **`ltc_diag_t` + `ltc_source_get_diag()`** (ltc-source.h/c): one
+     struct carrying raw/applied/delta offsets, RTT, age, method, synced,
+     sticky sync-lost, initial clock skew, fps. Heartbeat, sidecar and
+     log lines all read THIS — the same numbers everywhere. The old
+     6-out-param accessor remains as a thin wrapper.
+     `ntp_offset_ms_applied` is now volatile (cross-thread read).
+  2. **Heartbeat carries 3 new fields** (consent bumped to v3 per the
+     TICKET-048 mechanism; dialog bullet + datenschutz.php Abschnitt 3
+     row + re-consent infobox updated): `rtt_ms` (line quality — WHO has
+     the congested family line), `applied_delta_ms` (live distance of
+     the RECORDED timecode from the measured target — the number that
+     matters during a take), `initial_skew_ms` (PC clock error at first
+     sync — whose Windows clock was broken at boot; COALESCE-persisted
+     like plugin_version since it's a boot-time fact).
+  3. **Dashboard renders them**: RTT inline with colour (orange > 150 ms,
+     red > 1 s), "TC-Abw." when > ~1 frame, persistent orange line
+     "PC-Uhr war beim Start X falsch — Windows-Zeitdienst pruefen" when
+     |skew| > 2 s (delivers the TICKET-044 deferred dashboard wiring).
+  4. **One INFO log line per successful sync cycle** ("Time sync:
+     +12 ms via time.cloudflare.com (NTP, RTT 18 ms, applied +9 ms)") —
+     OBS's built-in Help → Log Files → Upload is the one log path a
+     non-technical user CAN operate, and with this line every uploaded
+     log is a timestamped measurement history of the whole evening.
+  5. **Sidecar gains post-mortem fields**: ntp_rtt_ms,
+     applied_offset_ms, applied_delta_ms, offset_age_sec,
+     initial_clock_skew_ms, sync_lost_in_session — weeks later the
+     cutter/developer can reconstruct the shoot without anyone's memory.
+  6. **Server**: idempotent migrations (rtt_ms, applied_delta_ms,
+     initial_skew_ms INT NULL), validation (junk → NULL), status + SSE
+     SELECTs extended.
+- **Verified:** 4/4 C ctest suites green (2 new gtest shape cases, 23
+  call sites migrated); **28/28 PHPUnit tests green against a real local
+  MariaDB** (3 new cases: accept, junk→NULL, skew COALESCE-preserved) —
+  first full local DB-backed run this session; PHP/JS lint clean.
+- **Files:** `src/ltc-source.{c,h}`, `src/mw-recording-helpers.{c,h}`,
+  `src/mw-recording.c`, `src/metadata-writer.c`,
+  `tests/test-mw-helpers.cpp`, `website/install.php`, `website/api.php`,
+  `website/sse.php`, `website/assets/app.js`, `website/datenschutz.php`,
+  `website/tests/HeartbeatTest.php`.
+
 #### TICKET-061: Scene form memory + +1 buttons
 - **Status:** `DONE`
 - **Type:** UX improvement (website-only)
@@ -1359,6 +1780,11 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 | 2026-05-23 | TICKET-056 | Roll back pause force-resume (TICKET-055), keep warning-only | Field-reproduced deadlock within ~2 h of 0.6.0 tag: calling `obs_frontend_recording_pause(false)` from inside the OBS frontend event callback caused the subsequent Stop transition to hang indefinitely. Re-entrancy into the frontend API from an event handler is not safe (no public docs confirm this either way, but the deadlock is reproducible). Warning-only is what 0.5.x shipped without incident. Future work: defer force-resume to a separate thread or async timer, then re-enable. | Try a small `os_sleep_ms` before the resume (still re-enters frontend API; likely same deadlock), keep the broken behaviour with a workaround for stuck-stop (no clean recovery path exists), drop the warning entirely (loses important signal). |
 | 2026-05-23 | TICKET-056 | Defensive `HEARTBEAT_TIMEOUT` default of 60 s in `db.php` | Production `config.php` was set to an unreasonably high value (or possibly not defined at all — the file is gitignored so we can't audit it from the repo). Killed plugins stayed "online" on the dashboard for the entire shoot, which is exactly the visibility regression the director cannot afford. 60 s = one plugin heartbeat interval (30 s) + one full miss + grace, matching the field intuition of "near-instant after kill". User-defined value in `config.php` still wins; this is a safety net for the case where the constant is missing. | Hardcode an even shorter timeout (false positives on transient network blips), pass via env var (more configuration surface), make heartbeat thread send more often (network load × 15 users for marginal latency win). |
 | 2026-05-23 | TICKET-058 | Filter GitHub releases by `name LIKE %Minewache%`, not by `target_commitish` | `target_commitish` for tag-pushed releases is the commit SHA, not the branch name, so it can't be used to filter for Minewache-branch releases. CI ships Minewache releases with "Minewache Specific Version" in the title (per Session 11 notes), which is a stable substring match. Picks the first non-prerelease, non-draft release that matches — robust against future master-branch releases being interleaved on the same repo. | Use `target_commitish` (returns commit SHA, useless for branch filter), tag pattern filter (no canonical naming convention enforced today), require config.php to pin the version (defeats the auto-fetch purpose). |
+| 2026-06-10 | TICKET-072 | Network model = German residential lines, explicitly | User-corrected assumption: there are no exotic uplinks in this fleet — the worst case IS the normal private German connection (DS-Lite CGNAT on cable, DSL with thin uplink + bufferbloat, evening DOCSIS congestion). Consequences implemented: AF_UNSPEC so native IPv6 beats CGNAT-tunneled IPv4 on DS-Lite; ≤60 s re-measure after a mediocre-RTT cycle because congestion windows on these lines are minutes, not hours; client-side JSON escaping because telemetry must survive ANY configured display name (server 400s broken JSON before sanitizing). | Force IPv4 (picks the worse path on DS-Lite), full-interval wait after mediocre samples (bakes evening-congestion noise in for 5 min), rely on server-side name sanitizing (runs after json_decode — too late) |
+| 2026-06-10 | TICKET-071 | NTP sample quality via min-RTT selection; NO history-based outlier rejection | Offset error of one SNTP sample is bounded by ±RTT/2 — on consumer uplinks (asymmetric DSL/cable + bufferbloat) that is the dominant error source, reaching ±1 s+ during uploads. Min-RTT-of-3 per server bounds the error without assuming anything about the local clock. History-based rejection ("offset differs too much from last time") was explicitly rejected: the OS clock legitimately steps (w32time, manual fix) and such a filter would suppress exactly the corrections this plugin exists to apply. Chain continues past mediocre samples but keeps best-of-chain as fallback — a 600 ms-RTT NTP sample still beats HTTP Date (~1 s granularity) and beats free-running. | Median-of-N (doesn't bound asymmetry error, costs more samples), NTP `root_dispersion`-based filtering (server-side quality only, says nothing about the local path), strict reject-all-above-150 ms (LTE-hotspot shoots would degrade to local clock — strictly worse) |
+| 2026-06-10 | TICKET-063 | Between-takes offset jump moved BEFORE the MW enabled/consent gates in `on_frontend_event` | The jump is purely local (no transmission), but living inside `mw-recording.c` behind `if (!g_mw.enabled) return;` made drift correction a side effect of MW telemetry being configured. In a mixed fleet that produced the worst possible outcome: corrected and uncorrected cameras diverged. Sync correctness must never depend on opt-in telemetry. | Move the trigger into `ltc-source.c` via its own frontend callback (cleaner long-term, but touches source lifecycle right before a shoot), leave as-is and require MW on all PCs (unenforceable in the field) |
+| 2026-06-10 | TICKET-063 | Recording slew rate fixed to a true 25 ppm via frame-counter gating (1 ms per 40 s of media) | The 0.5.x value `1 ms/frame` was justified in the Decision Log as "25 ppm @ 25 fps" — a 1000× math error (it is 25,000 ppm). At that rate a stale start offset turns into a non-linear TC ramp inside the clip, which is why cutters saw material drift apart AFTER syncing on a TC point. With TICKET-059/063 closing offsets between takes, in-take slewing only needs to track OS-clock micro-drift (~20 ppm), so 25 ppm is sufficient AND decode-safe. | Freeze offset entirely during recording (loses OS-drift tracking on multi-hour takes), sub-ms slewing via µs-granular applied offset (larger refactor, same audible result) |
+| 2026-06-10 | TICKET-063 | `!first_sync_done` instant-apply and recovery edge both gated on `!recording`; edge no longer cleared when it can't be applied | The 3-failure reset (TICKET-040) made `!first_sync_done` true during recordings with flaky networks; recovery then hard-jumped TC mid-file — exactly the discontinuity class TICKET-008/036 forbid. Keeping the edge set until the first idle frame means recovery/resync intent is never silently dropped. | Apply with LOG_WARNING mid-recording (still corrupts the file), separate "pending jump" flag (duplicates `ntp_sync_recovered_edge` semantics) |
 | 2026-05-23 | TICKET-059 | Auto-jump applied → target on RECORDING_STOPPED via existing `ntp_sync_recovered_edge` trigger | The slewing-only model from Epic 17 can't bridge a multi-second OS-clock skew between takes — 50 s offset needs 200 s idle slewing at 10 ms/frame, way longer than directors wait between takes. Re-using the existing edge-trigger plumbing (set the flag, encoder applies on next idle frame) keeps the fix to ~30 lines and doesn't introduce a new code path that needs separate testing. The contract preserved: jump only when NOT recording, so no LTC discontinuity ever lands in a file. Guard on `first_sync_done` skips the case where NTP has never succeeded — the `initial_sync` path already handles that. | Speed up idle slewing rate to 100 ms/frame (still 5 s for 50 s skew, and an arbitrary number), trigger only via dashboard click (already exists, but requires director attention every take), do nothing (was the bug). |
 
 ---
@@ -1367,6 +1793,15 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 | Session | Date | Agent | Tickets Worked | Status at End | Notes |
 |---------|------|-------|----------------|---------------|-------|
+| 31 | 2026-06-10 | Claude (Fable) | TICKET-075 (done) | 0.6.3 ready | Gegenstück zu TICKET-074: maximale Ferndiagnose für Entwickler/Regisseur auf allen drei Kanälen, gespeist aus EINER Quelle (`ltc_diag_t`/`ltc_source_get_diag()`; alter Accessor bleibt als Wrapper). Heartbeat +3 Felder (rtt_ms = Leitungsqualität, applied_delta_ms = Live-TC-Restabweichung, initial_skew_ms = Boot-Uhrfehler, COALESCE-persistiert) mit Consent-Bump auf v3 nach TICKET-048-Verfahren (Dialog-Bullet, datenschutz.php v3 + neue Tabellenzeile + Re-Consent-Box). Dashboard rendert RTT (farbcodiert), TC-Abw. (> 1 Frame) und persistenten Uhr-Fehler-Hinweis (löst das deferred TICKET-044-Dashboard-Wiring ein). Pro erfolgreichem Sync-Zyklus eine INFO-Logzeile → jedes via OBS "Log hochladen" geteilte Log ist eine Mess-Historie des Abends. Sidecar +6 Post-Mortem-Felder. Server: idempotente Migrationen, Junk→NULL-Validierung, status+SSE-SELECTs. Verifikation: 4/4 C-Suiten grün (23 Callsites migriert, 2 neue Shape-Tests); erstmals voller lokaler DB-Lauf: **28/28 PHPUnit gegen echte MariaDB** (3 neue Fälle; install.php-Guard mit MW_TEST_MODE-Ausnahme dabei mitverifiziert). |
+| 30 | 2026-06-10 | Claude (Fable) | TICKET-074 (done) | 0.6.3 ready | Support-surface round after user context ("viele Nutzer sind strohdumm, sitzen aber WÄHREND der Nutzung im Discord mit Entwickler+Regisseur"). Consequence: the user-visible surface must be Discord-relay-grade, logs are unreachable for this audience. Shipped: de-DE.ini (full German locale — English-only warnings were de-facto invisible for this fleet; OBS picks it up on German installs, installers deploy data/ recursively anyway); warnings now carry instructions ("SOFORT im Discord melden") instead of just describing the condition; Properties status enriched with measurement age + RTT; new `_support_info` property = one dense line (version | Cam | fps | Track | method offset @age RTT | TC) explicitly labelled for screenshot/paste into Discord; auto-setup dialogs migrated MessageBoxA→W with \u escapes — UTF-8 umlauts through the ANSI API rendered "MÃ¶chtest" on German Windows since the first release (the MW dialogs got this fix in TICKET-030, auto-setup was missed). Verified: 4/4 ctest suites green, syntax-clean both frontend modes (only known system-libobs header warnings in container). |
+| 29 | 2026-06-10 | Claude (Fable) | TICKET-073 (done) | 0.6.3 ready | Family-line refinement after user clarification ("oft Familienanschlüsse — die Schwester streamt gerade Netflix"). (1) NTP-Sample-Gap 250 ms → 2000 ms: ABR-Player bursten segmentweise mit Sekunden-Pausen; drei Samples über ~4,5 s verteilt erwischen mit hoher Wahrscheinlichkeit eine Burst-Pause, eng beieinander liegende Samples sahen alle dieselbe Congestion (Min-RTT hatte nichts Besseres zur Auswahl). Kostet nur Zeit, wenn die Qualität ohnehin schlecht ist (GOOD-Sample → sofortiger Exit). (2) mw_http_post mit Timeout-Parameter: Heartbeat-Thread 10 s (eine über TLS-Setup stolpernde POST ließ die Kamera am Dashboard "offline" flackern, während sie sauber aufnimmt), Start/Stop/Consent bleiben bei 5 s weil sie auf dem OBS-UI-Thread laufen (sync curl im Frontend-Callback = vorbestehende Design-Warze, async-Dispatch als künftiges Ticket notiert). Log-Wording auf Haushalts-Realität angepasst ("Household line busy — someone streaming/uploading?"). 4/4 ctest-Suiten grün. |
+| 28 | 2026-06-10 | Claude (Fable) | TICKET-072 (done) | 0.6.3 ready | General hardening pass + network-model correction (user: "private Anschlüsse in Deutschland, eines der ekligsten Netze für so eine Aufgabe" — kein LTE-Hotspot-Szenario). Highlights: client-side JSON escaping for the display name (a quote in the name 400'd every heartbeat BEFORE server-side sanitizing → camera silently invisible; helper + 7 tests); SNTP hardening (connected UDP socket, RFC-4330 originate-timestamp nonce, 2036 era handling, pre-2020 garbage-server floor); AF_UNSPEC + address walking so DS-Lite lines use native IPv6 instead of CGNAT-tunneled IPv4; ≤60 s re-measure after mediocre-RTT cycles (evening congestion windows are minutes); loud LOG_ERROR on previously silent thread/event/encoder creation failures (TC free-running or silent audio without any hint); sidecar extension replacement basename-only + JSON-escaped path/server fields; Win32 UTF-8 conversion guarantees terminated strings, utf8_to_wide handles malloc failure, server URL tolerates trailing slash. heartbeat skips the tick on body-build failure instead of POSTing truncated JSON. 4/4 ctest suites green; only pre-existing system-libobs header warnings remain in the container check (CI builds against the real OBS SDK). |
+| 27 | 2026-06-10 | Claude (Fable) | TICKET-071 (done) | 0.6.3 ready | Network-reality safeguards for the NTP path (user mandate: the plugin must not be naive about the decentralized consumer networks it runs on). ntp_query measured roundtrip and discarded it; now: min-RTT-of-3 sampling per server (250 ms gaps against bufferbloat correlation), early exit below 150 ms, hard discard above 3 s, best-of-chain fallback so an LTE-hotspot shoot still gets NTP instead of degrading to HTTP/local, warning log with concrete ±RTT/2 uncertainty when accepting a mediocre sample. New pure helper `ntp_select_best_sample()` + 7 unit tests. Explicit non-goal documented in Decision Log: no history-based outlier rejection (would suppress legitimate OS-clock-step corrections). Worst-case chain duration ~26 s, still under the 60 s minimum sync interval. All 4 ctest suites green; -Wall -Wextra -Werror clean. |
+| 26 | 2026-06-10 | Claude (Fable) | TICKET-070 (done) | 0.6.3 ready | Use-case logic audit ("plausibel bis man an den Drehtag denkt"). (1) video_tick sample truncation drained ~0.6 ms/s from the audio timeline → 200 ms timestamp resync ≈ every 5 min = periodic LTC dropout + wobble vs. other tracks in EVERY long recording; fixed via fractional-sample accumulator + removed fabricated 33 ms output on zero ticks. (2) Cold-start burst ran on wall-clock schedule — PC boots before router (dezentrale Heimnetze!), burst verpufft, dann 5 min Funkstille; now burst-pace retry while never-synced, cycle_count reset on first success. (3) Drop-frame mapping emitted duplicate labels at minute boundaries (decoder/NLE lock loss); replaced with standard SMPTE 12M renumbering, tests updated + monotonicity test. (4) Dashboard "Letzte Sync" turned orange at 180 s with a 300 s default sync interval — healthy cameras cycled orange (cry-wolf); thresholds now 330/630 s. New regression test for the actual production encode path (set_timecode per frame): initial failure was a test-harness artifact (decoder queue holds 32 frames — must drain incrementally); with correct streaming the path decodes as strict +1 sequence, confirming TICKET-040's encoder usage is sound. All 4 ctest suites green (15 timecode tests incl. 3 new/updated DF, 13 roundtrip incl. new production-path test); -Wall -Wextra -Werror clean both frontend modes; app.js node --check clean. |
+| 25 | 2026-06-10 | Claude (Fable) | TICKET-069 (done) | 0.6.3 ready | Non-security functional cleanup pass. (1) Properties UI: the NTP-status and current-timecode info lines showed only their static labels — the actual values were never rendered (the timecode was even computed and thrown away). Both now show live snapshots, finally using the dead `NTPSynced`/`HTTPSynced`/`NTPNotSynced` locale keys. (2) Metadata sidecar reported create-time sync values (`ntp_synced=false`, `offset=0`) for every recording because `set_info` only runs on settings changes; `write_sidecar_end` now pulls live state via `ltc_source_get_current_offset()`. (3) Sidecar framerate wrote "30" for 29.97df — the classic mixup that breaks Resolve sync; added `fps_label_str()` returning "29.97". Removed dead `write_sidecar_start()` + the no-op record-path fetch in the STARTED handler. Verified: compiles clean with `-Wall -Wextra -Werror` both with and without `ENABLE_FRONTEND_API`; 4/4 ctest suites green. |
+| 24 | 2026-06-10 | Claude (Fable) | TICKET-065, 066, 067, 068 (all done) | 0.6.3 ready | Full cross-layer audit follow-up. Plugin/build: (065) install.sh never deployed libltc.so → Linux plugin load failure; now copies + verifies it, and CMakeLists sets `$ORIGIN` RPATH on Linux so the loader resolves libltc next to the plugin (mirrors the macOS Frameworks RPATH). CI: (066) removed `continue-on-error: true` from all three `Run Tests` jobs — the step could never fail the build, so a red test still shipped a green artifact; suites are network-free so no flake risk. Template: (067) the MW scene collection stored `ntp_sync_interval` but the plugin reads `sync_interval`, so the configured value was silently dead (and `5` would've meant 5 s); renamed to `sync_interval: 300`, added explicit `audio_track`/`camera_id`. Website: (068) scene_name was HTML-escaped before DB storage AND on output (double-encoding `A&B`→`A&amp;B`); the delete button used `addslashes(htmlspecialchars())` in a JS-in-attribute context (replaced with `htmlspecialchars(json_encode(),ENT_QUOTES)`); install.php was re-runnable by any visitor (added `.install_complete` marker guard, test-mode exempt). Verified: 4/4 C ctest suites green; PHP lint clean on all touched files; JSON/YAML/bash all parse. Audited but deliberately NOT changed (false positives or out-of-scope): Inno Setup already fails loudly on missing libltc.dll (no skipif on that line); Linux ctest finds libltc via CMake's automatic build-tree RPATH (standalone run confirmed); RecTracks appears twice but legitimately (SimpleOutput + AdvOut are different output modes); time-of-day-derived drop-frame TC is an accepted design tradeoff, not touched to avoid regressions. |
+| 23 | 2026-06-10 | Claude (Fable) | TICKET-063 (done), TICKET-064 (done) | 0.6.3 ready | Root-cause session for the cutter report "offsets got worse after sync" (30 fps shoot). Found + fixed three sync bugs: (1) TICKET-059's between-takes instant offset apply only fired when MW Aufnahme was enabled — `ltc_source_signal_recording_stopped()` sat behind `if (!g_mw.enabled) return;` in `on_frontend_event`, so unconfigured cameras kept stale applied offsets all day while MW cameras snapped correct → relative offsets across the fleet got worse, confirming the field suspicion. Call hoisted above the enabled/consent gates. (2) Recording slew rate was a 1000× math error: 1 ms/frame ≈ 30,000 ppm at 30 fps (Decision Log claimed 25 ppm). Takes that started with a stale offset got a non-linear TC ramp baked in → clips aligned at the sync point drift apart over their duration. Now 1 ms per 40 s of media (true 25 ppm) via frame-counter gating. (3) Sync-loss(≥3)+recovery mid-recording hard-jumped TC inside the file because `!first_sync_done` bypassed the recording check; now gated, and the recovery edge survives until the first idle frame instead of being consumed-and-dropped during recording. Also: TICKET-064 — camera IDs 8–15 (Kamera I–P) were silently never written to LTC user7 (`camera_id <= 7` guard missed in the TICKET-032 expansion); fixed + regression test `CameraIDUpperRangeRoundtrip`. Bonus: unguarded `obs_frontend_recording_active()` in the TICKET-043 block broke `ENABLE_FRONTEND_API=OFF` builds — wrapped in `#ifdef`. Verified: 4/4 standalone ctest suites green (timecode, ntp-offset, ltc-roundtrip incl. new test, mw-helpers); `ltc-source.c`/`mw-recording.c` syntax-clean against system libobs headers with and without frontend API. buildspec bumped to 0.6.3. |
 | 22 | 2026-05-27 | Claude Sonnet 4.6 | TICKET-061 (done), TICKET-062 (done) | Both DONE | Website-only UX polish. TICKET-061: scene modal now persists last-saved season/episode/scene_name in localStorage and pre-fills on reopen; take resets to 1 each time; +1 buttons added next to all three number fields for one-click increment. TICKET-062: "Kameras" column in scenes.php table now shows compact circular letter badges (22 px, tooltip = name) directly in the main row instead of a bare count — directors see who was in each scene without expanding. Expand-on-click detail row with full timestamps unchanged. No backend changes, no schema changes. |
 | 21 | 2026-05-23 | Claude Opus 4.7 (1M) | TICKET-057, TICKET-058, TICKET-059 | 0.6.2 shipped (server + plugin) | Cluster of follow-ups after 0.6.1. TICKET-057 (server-only): handle_start now copies plugin_version from the previous session row into the new one, so the dashboard doesn't show "Plugin V nicht gefunden" for ~30 s between recording start and first heartbeat. TICKET-058 (server-only): `latest_version.php` auto-fetches the latest release from the GitHub API (filtered to Minewache by matching "Minewache" in the release name), 1 h cache, multi-stage fallback. Replaces the previous hardcoded `window.MW_LATEST_PLUGIN_VERSION` so we never again forget to bump it on a release. Smoke-tested locally — returned "0.6.1". TICKET-059 (plugin): new `ltc_source_signal_recording_stopped()` API that sets `ntp_sync_recovered_edge=true` on every LTC source via `obs_enum_sources`, called from the `RECORDING_STOPPED` handler. Fixes the "50 s offset persists across takes" field bug — slewing alone (max 10 ms/frame idle) couldn't bridge a multi-second OS-clock skew in a normal between-takes window, and the existing edge trigger only fired on NTP degrade/recovery or director kick (neither happens for a steadily-wrong PC clock). Callback guards on `first_sync_done` so cold-start cases still use the `initial_sync` path. Build clean on Windows. |
 | 20 | 2026-05-23 | Claude Opus 4.7 (1M) | TICKET-055 (rolled back), TICKET-056 (done) | 0.6.1 hotfix shipped | Field-reproduced ~2 h after 0.6.0 tag: (a) TICKET-055 force-resume from inside `OBS_FRONTEND_EVENT_RECORDING_PAUSED` deadlocks the subsequent Stop ("Aufnahme wird beendet" hangs indefinitely) — re-entrancy into the OBS frontend API from an event callback is not safe. Reverted to warning-only modal (matches 0.5.x behaviour). (b) Killed OBS instances stayed "online" on the dashboard because `HEARTBEAT_TIMEOUT` constant was likely undefined or set too high in the production `config.php` (gitignored, can't see it). Added defensive `if (!defined('HEARTBEAT_TIMEOUT')) define(..., 60)` in `db.php` — 60 s = one full 30 s plugin heartbeat miss + 30 s grace. Files: `src/mw-recording.c`, `website/includes/db.php`. Build clean on Windows. |

@@ -223,7 +223,7 @@ try {
                             <td><?= $scene['started_at'] ? date('H:i:s', strtotime($scene['started_at'])) : '-' ?></td>
                             <td><?= $scene['stopped_at'] ? date('H:i:s', strtotime($scene['stopped_at'])) : '-' ?></td>
                             <td><?= date('d.m.Y H:i', strtotime($scene['created_at'])) ?></td>
-                            <td><button class="scene-delete-btn" onclick="event.stopPropagation();deleteScene(<?= (int)$scene['id'] ?>,'<?= addslashes(htmlspecialchars($scene['scene_name'])) ?>')">Loeschen</button></td>
+                            <td><button class="scene-delete-btn" onclick="event.stopPropagation();deleteScene(<?= (int)$scene['id'] ?>, <?= htmlspecialchars(json_encode($scene['scene_name']), ENT_QUOTES, 'UTF-8') ?>)">Loeschen</button></td>
                         </tr>
                         <tr class="scene-detail" id="detail-<?= $i ?>">
                             <td colspan="9">

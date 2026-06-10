@@ -91,14 +91,22 @@ static bool is_current_scene_collection(const char *name)
 static bool show_switch_dialog(void)
 {
 #ifdef _WIN32
-	int result = MessageBoxA(NULL,
-				 "Das Minewache-New Template mit vorkonfiguriertem "
-				 "LTC Timecode (Track 3) wurde erkannt.\n\n"
-				 "Möchtest du zur Minewache-New Scene Collection wechseln?\n\n"
-				 "Track 1: Stimmen Audio\n"
-				 "Track 2: Ingame Audio\n"
-				 "Track 3: LTC Timecode (für DaVinci Resolve Sync)",
-				 "OBS LTC Timecode - Setup", MB_YESNO | MB_ICONQUESTION | MB_SYSTEMMODAL);
+	/* MessageBoxW, not ...A: the source file is UTF-8, and the ANSI API
+	 * renders the umlauts as mojibake ("MÃ¶chtest") on a German Windows.
+	 * Non-technical users screenshot exactly such dialogs into Discord —
+	 * a garbled dialog destroys trust in the whole setup. Same migration
+	 * the MW dialogs got in TICKET-030. */
+	int result = MessageBoxW(
+		NULL,
+		L"Das Minewache-New Template mit vorkonfiguriertem "
+		L"LTC Timecode (Track 3) wurde erkannt.\n\n"
+		L"M\u00F6chtest du zur Minewache-New Scene Collection "
+		L"wechseln?\n\n"
+		L"Track 1: Stimmen Audio\n"
+		L"Track 2: Ingame Audio\n"
+		L"Track 3: LTC Timecode (f\u00FCr DaVinci Resolve Sync)",
+		L"OBS LTC Timecode - Setup",
+		MB_YESNO | MB_ICONQUESTION | MB_SYSTEMMODAL);
 	return result == IDYES;
 #else
 	/* On Linux, auto-switch without dialog */
@@ -110,13 +118,15 @@ static bool show_switch_dialog(void)
 static bool show_upgrade_dialog(void)
 {
 #ifdef _WIN32
-	int result = MessageBoxA(NULL,
-				 "Ein älteres Minewache-Template wurde erkannt.\n\n"
-				 "Möchtest du auf das neue Minewache-New Template "
-				 "upgraden?\n\n"
-				 "Das neue Template hat LTC Timecode vorkonfiguriert "
-				 "auf Track 3.",
-				 "OBS LTC Timecode - Upgrade", MB_YESNO | MB_ICONQUESTION | MB_SYSTEMMODAL);
+	int result = MessageBoxW(
+		NULL,
+		L"Ein \u00E4lteres Minewache-Template wurde erkannt.\n\n"
+		L"M\u00F6chtest du auf das neue Minewache-New Template "
+		L"upgraden?\n\n"
+		L"Das neue Template hat LTC Timecode vorkonfiguriert "
+		L"auf Track 3.",
+		L"OBS LTC Timecode - Upgrade",
+		MB_YESNO | MB_ICONQUESTION | MB_SYSTEMMODAL);
 	return result == IDYES;
 #else
 	obs_log(LOG_INFO, "Legacy Minewache found, upgrading to Minewache-New");
