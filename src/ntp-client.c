@@ -150,14 +150,12 @@ bool ntp_query(const char *server, int timeout_ms, ntp_result_t *result)
 #ifdef _WIN32
 		/* Windows: SO_RCVTIMEO expects a DWORD (milliseconds) */
 		DWORD rcv_timeout = (DWORD)timeout_ms;
-		setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,
-			   (const char *)&rcv_timeout, sizeof(rcv_timeout));
+		setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&rcv_timeout, sizeof(rcv_timeout));
 #else
 		struct timeval tv;
 		tv.tv_sec = timeout_ms / 1000;
 		tv.tv_usec = (timeout_ms % 1000) * 1000;
-		setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv,
-			   sizeof(tv));
+		setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
 #endif
 
 		/* Connect the UDP socket: the kernel then discards datagrams
@@ -220,8 +218,7 @@ bool ntp_query(const char *server, int timeout_ms, ntp_result_t *result)
 		return false;
 
 	/* Originate timestamp must echo our transmit timestamp (nonce). */
-	if (packet.orig_ts_sec != htonl(t1_ntp_sec) ||
-	    packet.orig_ts_frac != htonl(t1_ntp_frac))
+	if (packet.orig_ts_sec != htonl(t1_ntp_sec) || packet.orig_ts_frac != htonl(t1_ntp_frac))
 		return false;
 
 	/* Record T4 (client receive time) */
@@ -280,8 +277,7 @@ void ntp_corrected_time(int64_t offset_ms, int64_t *out_sec, int64_t *out_usec)
 		*out_usec = total_usec;
 }
 
-int ntp_select_best_sample(const ntp_result_t *samples, int count,
-			   int64_t max_rtt_ms)
+int ntp_select_best_sample(const ntp_result_t *samples, int count, int64_t max_rtt_ms)
 {
 	int best = -1;
 
@@ -293,8 +289,7 @@ int ntp_select_best_sample(const ntp_result_t *samples, int count,
 			continue;
 		if (max_rtt_ms > 0 && samples[i].roundtrip_ms > max_rtt_ms)
 			continue;
-		if (best < 0 ||
-		    samples[i].roundtrip_ms < samples[best].roundtrip_ms)
+		if (best < 0 || samples[i].roundtrip_ms < samples[best].roundtrip_ms)
 			best = i;
 	}
 

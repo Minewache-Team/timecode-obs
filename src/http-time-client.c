@@ -55,25 +55,20 @@ struct header_data {
 	bool found;
 };
 
-static size_t header_callback(char *buffer, size_t size, size_t nitems,
-			      void *userdata)
+static size_t header_callback(char *buffer, size_t size, size_t nitems, void *userdata)
 {
 	struct header_data *hd = (struct header_data *)userdata;
 	size_t total = size * nitems;
 
-	if (!hd->found && total > 6 &&
-	    (buffer[0] == 'D' || buffer[0] == 'd') &&
-	    (buffer[1] == 'a' || buffer[1] == 'A') &&
-	    (buffer[2] == 't' || buffer[2] == 'T') &&
-	    (buffer[3] == 'e' || buffer[3] == 'E') && buffer[4] == ':' &&
-	    buffer[5] == ' ') {
+	if (!hd->found && total > 6 && (buffer[0] == 'D' || buffer[0] == 'd') &&
+	    (buffer[1] == 'a' || buffer[1] == 'A') && (buffer[2] == 't' || buffer[2] == 'T') &&
+	    (buffer[3] == 'e' || buffer[3] == 'E') && buffer[4] == ':' && buffer[5] == ' ') {
 		size_t len = total - 6;
 		if (len >= sizeof(hd->date_str))
 			len = sizeof(hd->date_str) - 1;
 		memcpy(hd->date_str, buffer + 6, len);
 		/* Strip trailing \r\n */
-		while (len > 0 && (hd->date_str[len - 1] == '\r' ||
-				   hd->date_str[len - 1] == '\n'))
+		while (len > 0 && (hd->date_str[len - 1] == '\r' || hd->date_str[len - 1] == '\n'))
 			len--;
 		hd->date_str[len] = '\0';
 		hd->found = true;
@@ -107,8 +102,7 @@ static int64_t get_time_ms(void)
 #endif
 }
 
-bool http_time_query(const char *url, int timeout_ms,
-		     http_time_result_t *result)
+bool http_time_query(const char *url, int timeout_ms, http_time_result_t *result)
 {
 	if (!url || !result)
 		return false;
@@ -137,8 +131,7 @@ bool http_time_query(const char *url, int timeout_ms,
 	curl_easy_setopt(curl, CURLOPT_HEADERDATA, &hd);
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, discard_body);
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, (long)timeout_ms);
-	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS,
-			 (long)(timeout_ms / 2));
+	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, (long)(timeout_ms / 2));
 	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
 	curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 3L);
 	/* Disable SSL verification to avoid cert bundle issues on Windows */
@@ -187,12 +180,10 @@ bool http_time_query(const char *url, int timeout_ms,
 /* Month name lookup for RFC 7231 date parsing */
 static int parse_month(const char *mon)
 {
-	static const char *months[] = {"Jan", "Feb", "Mar", "Apr", "May",
-				       "Jun", "Jul", "Aug", "Sep", "Oct",
-				       "Nov", "Dec"};
+	static const char *months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+				       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 	for (int i = 0; i < 12; i++) {
-		if (mon[0] == months[i][0] && mon[1] == months[i][1] &&
-		    mon[2] == months[i][2])
+		if (mon[0] == months[i][0] && mon[1] == months[i][1] && mon[2] == months[i][2])
 			return i + 1;
 	}
 	return 0;
@@ -253,8 +244,7 @@ bool http_time_parse_date(const char *date_str, int64_t *out_sec)
 	p += 4; /* skip "Mon " */
 
 	/* YYYY */
-	year = (p[0] - '0') * 1000 + (p[1] - '0') * 100 +
-	       (p[2] - '0') * 10 + (p[3] - '0');
+	year = (p[0] - '0') * 1000 + (p[1] - '0') * 100 + (p[2] - '0') * 10 + (p[3] - '0');
 	if (year < 1970 || year > 2099)
 		return false;
 	p += 5; /* skip "YYYY " */

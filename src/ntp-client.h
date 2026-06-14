@@ -92,8 +92,7 @@ void ntp_corrected_time(int64_t offset_ms, int64_t *out_sec, int64_t *out_usec);
  * Returns the index of the best usable sample, or -1 if none qualifies.
  * Pure function; no side effects (testable without network).
  */
-int ntp_select_best_sample(const ntp_result_t *samples, int count,
-			   int64_t max_rtt_ms);
+int ntp_select_best_sample(const ntp_result_t *samples, int count, int64_t max_rtt_ms);
 
 /*
  * Move `applied_ms` one step toward `target_ms`, clamped to ±max_step_ms.

@@ -98,30 +98,25 @@ TEST(TimecodeTest, DropFrameLabelsAreStrictlyMonotonic)
 		 * frame period to sample mid-frame, away from boundaries. */
 		int64_t t_us = k * 1001000000LL / 30000 + 16683;
 		smpte_timecode_t tc;
-		ASSERT_TRUE(timecode_from_unix(t_us / 1000000, t_us % 1000000,
-					       TC_FPS_29_97_DF, &tc));
-		int64_t idx = ((tc.hours * 60 + tc.minutes) * 60 + tc.seconds) *
-				      30 + tc.frames;
+		ASSERT_TRUE(timecode_from_unix(t_us / 1000000, t_us % 1000000, TC_FPS_29_97_DF, &tc));
+		int64_t idx = ((tc.hours * 60 + tc.minutes) * 60 + tc.seconds) * 30 + tc.frames;
 		if (prev_idx >= 0) {
 			/* In nominal index space a drop boundary advances by
 			 * exactly 3 (labels ;00/;01 don't exist); everywhere
 			 * else by exactly 1. Step 0 (the old duplicate-label
 			 * bug) or step 2 (half-applied drop) must fail. */
-			bool at_drop = (tc.seconds == 0 &&
-					(tc.minutes % 10) != 0 &&
-					tc.frames == 2 &&
-					prev_idx % 30 == 29);
+			bool at_drop =
+				(tc.seconds == 0 && (tc.minutes % 10) != 0 && tc.frames == 2 && prev_idx % 30 == 29);
 			int64_t expected_step = at_drop ? 3 : 1;
 			EXPECT_EQ(idx, prev_idx + expected_step)
-				<< "label discontinuity at frame period " << k
-				<< " (" << (int)tc.hours << ":" << (int)tc.minutes
-				<< ":" << (int)tc.seconds << ";" << (int)tc.frames
-				<< ")";
+				<< "label discontinuity at frame period " << k << " (" << (int)tc.hours << ":"
+				<< (int)tc.minutes << ":" << (int)tc.seconds << ";" << (int)tc.frames << ")";
 		}
 		/* Dropped labels must never appear: frames 0/1 are illegal at
 		 * non-10th minute starts. */
-		if (tc.seconds == 0 && (tc.minutes % 10) != 0)
+		if (tc.seconds == 0 && (tc.minutes % 10) != 0) {
 			EXPECT_GE(tc.frames, 2);
+		}
 		prev_idx = idx;
 	}
 }

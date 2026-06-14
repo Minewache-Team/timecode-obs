@@ -62,8 +62,7 @@ TEST(NTPOffsetTest, QueryNullParams)
 
 /* ---- ntp_select_best_sample ---- */
 
-static ntp_result_t make_sample(bool success, int64_t offset_ms,
-				int64_t roundtrip_ms)
+static ntp_result_t make_sample(bool success, int64_t offset_ms, int64_t roundtrip_ms)
 {
 	ntp_result_t r = {};
 	r.success = success;
@@ -148,7 +147,7 @@ TEST(NTPSlewStep, ZeroDiffIsNoOp)
 
 TEST(NTPSlewStep, WithinStepSnapsToTarget)
 {
-	EXPECT_EQ(ntp_slew_step(0, 5, 10), 5);    /* +5 < +10 step */
+	EXPECT_EQ(ntp_slew_step(0, 5, 10), 5);     /* +5 < +10 step */
 	EXPECT_EQ(ntp_slew_step(100, 95, 10), 95); /* -5 within step */
 	EXPECT_EQ(ntp_slew_step(0, 10, 10), 10);   /* exactly at step boundary */
 	EXPECT_EQ(ntp_slew_step(0, -10, 10), -10);

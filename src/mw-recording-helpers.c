@@ -62,8 +62,7 @@ int mw_json_escape_string(char *dst, size_t dstsz, const char *src)
 			break;
 		default:
 			if (*p < 0x20) {
-				snprintf(tmp, sizeof(tmp), "\\u%04x",
-					 (unsigned)*p);
+				snprintf(tmp, sizeof(tmp), "\\u%04x", (unsigned)*p);
 				rep = tmp;
 				replen = 6;
 			} else {
@@ -87,20 +86,10 @@ int mw_json_escape_string(char *dst, size_t dstsz, const char *src)
 	return (int)o;
 }
 
-int mw_build_heartbeat_body(char *buf, size_t bufsz,
-			    const char *name,
-			    bool recording_active,
-			    bool have_offset,
-			    int64_t offset_ms,
-			    int sync_method,
-			    bool synced,
-			    int64_t raw_offset_ms,
-			    int offset_age_sec,
-			    const char *plugin_version,
-			    bool sync_lost_in_session,
-			    int64_t rtt_ms,
-			    int64_t applied_delta_ms,
-			    int64_t initial_skew_ms)
+int mw_build_heartbeat_body(char *buf, size_t bufsz, const char *name, bool recording_active, bool have_offset,
+			    int64_t offset_ms, int sync_method, bool synced, int64_t raw_offset_ms, int offset_age_sec,
+			    const char *plugin_version, bool sync_lost_in_session, int64_t rtt_ms,
+			    int64_t applied_delta_ms, int64_t initial_skew_ms)
 {
 	if (!buf || bufsz == 0)
 		return -1;
@@ -118,9 +107,7 @@ int mw_build_heartbeat_body(char *buf, size_t bufsz,
 	/* Build the JSON in two appended halves: required fields first, then
 	 * optional fields conditionally. Keeps the four-branch matrix from
 	 * earlier collapsed into one path. */
-	int n = snprintf(buf, bufsz,
-			 "{\"name\":\"%s\",\"recording_active\":%s",
-			 esc_name,
+	int n = snprintf(buf, bufsz, "{\"name\":\"%s\",\"recording_active\":%s", esc_name,
 			 recording_active ? "true" : "false");
 	if (n < 0)
 		return -1;
@@ -141,13 +128,8 @@ int mw_build_heartbeat_body(char *buf, size_t bufsz,
 				 "\"offset_age_sec\":%d,\"rtt_ms\":%lld,"
 				 "\"applied_delta_ms\":%lld,"
 				 "\"initial_skew_ms\":%lld",
-				 (long long)offset_ms,
-				 sync_method,
-				 synced ? "true" : "false",
-				 (long long)raw_offset_ms,
-				 offset_age_sec,
-				 (long long)rtt_ms,
-				 (long long)applied_delta_ms,
+				 (long long)offset_ms, sync_method, synced ? "true" : "false", (long long)raw_offset_ms,
+				 offset_age_sec, (long long)rtt_ms, (long long)applied_delta_ms,
 				 (long long)initial_skew_ms);
 		if (m < 0)
 			return -1;
@@ -157,9 +139,7 @@ int mw_build_heartbeat_body(char *buf, size_t bufsz,
 	}
 
 	if (have_version) {
-		int m = snprintf(buf + n, bufsz - (size_t)n,
-				 ",\"plugin_version\":\"%s\"",
-				 plugin_version);
+		int m = snprintf(buf + n, bufsz - (size_t)n, ",\"plugin_version\":\"%s\"", plugin_version);
 		if (m < 0)
 			return -1;
 		n += m;
@@ -174,9 +154,7 @@ int mw_build_heartbeat_body(char *buf, size_t bufsz,
 	 * omit-when-not-applicable pattern of the offset/version fields,
 	 * because the dashboard needs an explicit signal to clear a previously
 	 * shown red marker. */
-	int m = snprintf(buf + n, bufsz - (size_t)n,
-			 ",\"sync_lost_in_session\":%s",
-			 sync_lost_str);
+	int m = snprintf(buf + n, bufsz - (size_t)n, ",\"sync_lost_in_session\":%s", sync_lost_str);
 	if (m < 0)
 		return -1;
 	n += m;
@@ -221,8 +199,7 @@ bool mw_response_has_resync(const char *response_body)
 			/* Make sure it's not "trueish" or similar — next char must
 			 * be a JSON terminator: , } space or end of string. */
 			char next = q[4];
-			if (next == ',' || next == '}' || next == ' ' ||
-			    next == '\t' || next == '\n' || next == '\r' ||
+			if (next == ',' || next == '}' || next == ' ' || next == '\t' || next == '\n' || next == '\r' ||
 			    next == 0)
 				return true;
 		}

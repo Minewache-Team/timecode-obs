@@ -67,8 +67,7 @@ void http_time_cleanup(void);
  * @param result      Output result with offset
  * @return true on success
  */
-bool http_time_query(const char *url, int timeout_ms,
-		     http_time_result_t *result);
+bool http_time_query(const char *url, int timeout_ms, http_time_result_t *result);
 
 /*
  * Parse an HTTP Date header string into Unix timestamp.

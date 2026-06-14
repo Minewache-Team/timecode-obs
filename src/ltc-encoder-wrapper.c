@@ -105,8 +105,7 @@ void ltc_wrapper_destroy(ltc_wrapper_t *w)
 	free(w);
 }
 
-void ltc_wrapper_set_timecode(ltc_wrapper_t *w, int h, int m, int s, int f,
-			      int year, int month, int day, int camera_id)
+void ltc_wrapper_set_timecode(ltc_wrapper_t *w, int h, int m, int s, int f, int year, int month, int day, int camera_id)
 {
 	if (!w || !w->encoder)
 		return;

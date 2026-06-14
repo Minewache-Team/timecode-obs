@@ -114,12 +114,8 @@ bool ltc_source_get_diag(ltc_diag_t *out);
  * Lock-free read: all backing fields are volatile and atomic-sized on the
  * target platforms; safe to call from any thread.
  */
-bool ltc_source_get_current_offset(int64_t *offset_ms,
-				   int *sync_method,
-				   bool *synced,
-				   int64_t *raw_offset_ms,
-				   int *offset_age_sec,
-				   bool *sync_lost_in_session);
+bool ltc_source_get_current_offset(int64_t *offset_ms, int *sync_method, bool *synced, int64_t *raw_offset_ms,
+				   int *offset_age_sec, bool *sync_lost_in_session);
 
 /*
  * Trigger an immediate NTP re-query on every LTC source's sync thread.

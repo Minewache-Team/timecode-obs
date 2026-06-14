@@ -231,11 +231,8 @@ static void *ntp_sync_thread(void *data)
 	 * Public NTP (Cloudflare/Google) wouldn't notice either way, but this
 	 * is cheap defence-in-depth. Uses os_gettime_ns() modulo, no rand()
 	 * — avoids thread-safety + reproducibility concerns. */
-	unsigned long jitter_ms =
-		(unsigned long)((os_gettime_ns() / 1000ULL) % 10000ULL);
-	obs_log(LOG_INFO,
-		"NTP cold-start jitter: waiting %lu ms before first query",
-		jitter_ms);
+	unsigned long jitter_ms = (unsigned long)((os_gettime_ns() / 1000ULL) % 10000ULL);
+	obs_log(LOG_INFO, "NTP cold-start jitter: waiting %lu ms before first query", jitter_ms);
 	if (os_event_timedwait(ctx->stop_event, jitter_ms) == 0)
 		return NULL;
 
@@ -260,8 +257,7 @@ static void *ntp_sync_thread(void *data)
 		/* Copy server name under lock to avoid data race with update */
 		char server_copy[256];
 		pthread_mutex_lock(&ctx->encoder_mutex);
-		snprintf(server_copy, sizeof(server_copy), "%s",
-			 ctx->ntp_server);
+		snprintf(server_copy, sizeof(server_copy), "%s", ctx->ntp_server);
 		pthread_mutex_unlock(&ctx->encoder_mutex);
 
 		/* 1+2) NTP chain: user-configured server, then the built-in
@@ -286,30 +282,24 @@ static void *ntp_sync_thread(void *data)
 			ntp_result_t samples[NTP_SAMPLES_PER_SERVER];
 			int n = 0;
 
-			for (int attempt = 0;
-			     attempt < NTP_SAMPLES_PER_SERVER; attempt++) {
+			for (int attempt = 0; attempt < NTP_SAMPLES_PER_SERVER; attempt++) {
 				if (os_event_try(ctx->stop_event) == 0)
 					return NULL;
 
 				ntp_result_t r;
-				if (ntp_query(chain[si], NTP_QUERY_TIMEOUT_MS,
-					      &r)) {
+				if (ntp_query(chain[si], NTP_QUERY_TIMEOUT_MS, &r)) {
 					samples[n++] = r;
 					if (r.roundtrip_ms <= NTP_RTT_GOOD_MS)
 						break;
 				}
 
 				if (attempt + 1 < NTP_SAMPLES_PER_SERVER &&
-				    os_event_timedwait(ctx->stop_event,
-						       NTP_SAMPLE_GAP_MS) == 0)
+				    os_event_timedwait(ctx->stop_event, NTP_SAMPLE_GAP_MS) == 0)
 					return NULL;
 			}
 
-			int bi = ntp_select_best_sample(samples, n,
-							NTP_RTT_HARD_MAX_MS);
-			if (bi >= 0 &&
-			    (!success ||
-			     samples[bi].roundtrip_ms < best.roundtrip_ms)) {
+			int bi = ntp_select_best_sample(samples, n, NTP_RTT_HARD_MAX_MS);
+			if (bi >= 0 && (!success || samples[bi].roundtrip_ms < best.roundtrip_ms)) {
 				best = samples[bi];
 				best_server = chain[si];
 				success = true;
@@ -322,8 +312,7 @@ static void *ntp_sync_thread(void *data)
 		if (success) {
 			result = best;
 			if (best_server != server_copy)
-				obs_log(LOG_INFO,
-					"NTP answered via %s (user-server '%s' unreachable or too slow)",
+				obs_log(LOG_INFO, "NTP answered via %s (user-server '%s' unreachable or too slow)",
 					best_server, server_copy);
 			if (best.roundtrip_ms > NTP_RTT_GOOD_MS)
 				obs_log(LOG_WARNING,
@@ -331,16 +320,13 @@ static void *ntp_sync_thread(void *data)
 					"offset uncertainty up to ±%lld ms. Household line "
 					"busy (someone streaming/uploading?); will re-measure "
 					"within 60 s.",
-					(long long)best.roundtrip_ms,
-					(long long)(best.roundtrip_ms / 2));
+					(long long)best.roundtrip_ms, (long long)(best.roundtrip_ms / 2));
 		}
 
 		/* 3) HTTP Date header fallback (last resort with a real source) */
 		if (!success) {
 			http_time_result_t http_result;
-			if (http_time_query(HTTP_FALLBACK_URL,
-					    HTTP_FALLBACK_TIMEOUT_MS,
-					    &http_result)) {
+			if (http_time_query(HTTP_FALLBACK_URL, HTTP_FALLBACK_TIMEOUT_MS, &http_result)) {
 				result.offset_ms = http_result.offset_ms;
 				result.roundtrip_ms = 0;
 				success = true;
@@ -352,9 +338,7 @@ static void *ntp_sync_thread(void *data)
 
 		/* 4) Apply or degrade */
 		if (success) {
-			bool was_degraded =
-				(ctx->consecutive_sync_failures > 0) ||
-				!ctx->ntp_synced;
+			bool was_degraded = (ctx->consecutive_sync_failures > 0) || !ctx->ntp_synced;
 			/* One INFO line per successful cycle. Users can't dig
 			 * out logs, but OBS's "Help → Log Files → Upload" can
 			 * — and with this line every uploaded log carries the
@@ -366,11 +350,8 @@ static void *ntp_sync_thread(void *data)
 				"Time sync: %+lld ms via %s (%s, RTT %lld ms, "
 				"applied %+lld ms)",
 				(long long)result.offset_ms,
-				method == SYNC_METHOD_NTP
-					? (best_server ? best_server : "?")
-					: "HTTP Date",
-				method == SYNC_METHOD_NTP ? "NTP" : "fallback",
-				(long long)result.roundtrip_ms,
+				method == SYNC_METHOD_NTP ? (best_server ? best_server : "?") : "HTTP Date",
+				method == SYNC_METHOD_NTP ? "NTP" : "fallback", (long long)result.roundtrip_ms,
 				(long long)ctx->ntp_offset_ms_applied);
 			ctx->ntp_target_offset_ms = result.offset_ms;
 			ctx->ntp_last_raw_offset_ms = result.offset_ms;
@@ -396,18 +377,15 @@ static void *ntp_sync_thread(void *data)
 				 * slewing will correct it over time but a loud
 				 * one-time warning lets the operator fix the
 				 * underlying issue. */
-				if (result.offset_ms > 2000 ||
-				    result.offset_ms < -2000) {
-					ctx->initial_clock_skew_ms =
-						result.offset_ms;
+				if (result.offset_ms > 2000 || result.offset_ms < -2000) {
+					ctx->initial_clock_skew_ms = result.offset_ms;
 					obs_log(LOG_ERROR,
 						"PC clock is %.1f s off from NTP "
 						"(%lld ms). Timecode will be "
 						"slewed to correct, but please "
 						"fix the Windows time service to "
 						"avoid this on the next start.",
-						(double)result.offset_ms / 1000.0,
-						(long long)result.offset_ms);
+						(double)result.offset_ms / 1000.0, (long long)result.offset_ms);
 				}
 			} else if (was_degraded || cycle_kicked_by_resync) {
 				/* Recovered from failure OR director-issued
@@ -416,11 +394,8 @@ static void *ntp_sync_thread(void *data)
 				 * when not recording — TICKET-036 contract). */
 				ctx->ntp_sync_recovered_edge = true;
 				if (was_degraded)
-					obs_log(LOG_INFO,
-						"Time sync restored via %s",
-						method == SYNC_METHOD_NTP
-							? "NTP"
-							: "HTTP fallback");
+					obs_log(LOG_INFO, "Time sync restored via %s",
+						method == SYNC_METHOD_NTP ? "NTP" : "HTTP fallback");
 			}
 		} else {
 			ctx->consecutive_sync_failures++;
@@ -428,8 +403,7 @@ static void *ntp_sync_thread(void *data)
 			ctx->sync_method = SYNC_METHOD_LOCAL;
 			uint64_t now_ns = os_gettime_ns();
 			if (ctx->consecutive_sync_failures == 1 ||
-			    now_ns - ctx->last_degraded_log_ns >=
-				    DEGRADED_LOG_INTERVAL_NS) {
+			    now_ns - ctx->last_degraded_log_ns >= DEGRADED_LOG_INTERVAL_NS) {
 				obs_log(LOG_ERROR,
 					"Time sync UNAVAILABLE — Timecode is drifting on the local clock. "
 					"Tried user='%s', time.cloudflare.com, time.google.com, HTTP Date header. "
@@ -450,14 +424,12 @@ static void *ntp_sync_thread(void *data)
 			 * silent for ~30 s already), mark this session as
 			 * having had a sync loss during recording. Sticky for
 			 * the rest of the plugin lifetime. */
-			if (ctx->consecutive_sync_failures >= 3 &&
-			    obs_frontend_recording_active()) {
+			if (ctx->consecutive_sync_failures >= 3 && obs_frontend_recording_active()) {
 				if (!ctx->sync_lost_in_session) {
-					obs_log(LOG_ERROR,
-						"NTP sync was lost during an "
-						"active recording — flagging "
-						"this session for post-production "
-						"review (sync_lost_in_session=true).");
+					obs_log(LOG_ERROR, "NTP sync was lost during an "
+							   "active recording — flagging "
+							   "this session for post-production "
+							   "review (sync_lost_in_session=true).");
 				}
 				ctx->sync_lost_in_session = true;
 			}
@@ -502,8 +474,7 @@ static void *ntp_sync_thread(void *data)
 		 * the full interval: quiet moments on such a line come and
 		 * go within minutes, and the next measurement replaces the
 		 * noisy target (slewing absorbs the difference). */
-		if (success && result.roundtrip_ms > NTP_RTT_GOOD_MS &&
-		    phase_sec > 60)
+		if (success && result.roundtrip_ms > NTP_RTT_GOOD_MS && phase_sec > 60)
 			phase_sec = 60;
 		unsigned long total_ms = phase_sec * 1000UL;
 		unsigned long elapsed_ms = 0;
@@ -517,10 +488,8 @@ static void *ntp_sync_thread(void *data)
 				return NULL;
 
 			/* AUTO event: try consumes-and-resets in one shot */
-			if (ctx->resync_event &&
-			    os_event_try(ctx->resync_event) == 0) {
-				obs_log(LOG_INFO,
-					"LTC NTP thread kicked by remote resync");
+			if (ctx->resync_event && os_event_try(ctx->resync_event) == 0) {
+				obs_log(LOG_INFO, "LTC NTP thread kicked by remote resync");
 				cycle_kicked_by_resync = true;
 				break; /* go around to re-run NTP query */
 			}
@@ -540,17 +509,15 @@ static void start_ntp_thread(struct ltc_source_context *ctx)
 	/* Every failure below means the timecode silently free-runs on the
 	 * local clock for the whole session — that must never be quiet. */
 	if (os_event_init(&ctx->stop_event, OS_EVENT_TYPE_MANUAL) != 0) {
-		obs_log(LOG_ERROR,
-			"Failed to create NTP stop event — timecode will "
-			"free-run on the LOCAL clock (no sync)!");
+		obs_log(LOG_ERROR, "Failed to create NTP stop event — timecode will "
+				   "free-run on the LOCAL clock (no sync)!");
 		return;
 	}
 	if (os_event_init(&ctx->resync_event, OS_EVENT_TYPE_AUTO) != 0) {
 		os_event_destroy(ctx->stop_event);
 		ctx->stop_event = NULL;
-		obs_log(LOG_ERROR,
-			"Failed to create NTP resync event — timecode will "
-			"free-run on the LOCAL clock (no sync)!");
+		obs_log(LOG_ERROR, "Failed to create NTP resync event — timecode will "
+				   "free-run on the LOCAL clock (no sync)!");
 		return;
 	}
 
@@ -561,9 +528,8 @@ static void start_ntp_thread(struct ltc_source_context *ctx)
 		os_event_destroy(ctx->resync_event);
 		ctx->stop_event = NULL;
 		ctx->resync_event = NULL;
-		obs_log(LOG_ERROR,
-			"Failed to start NTP sync thread — timecode will "
-			"free-run on the LOCAL clock (no sync)!");
+		obs_log(LOG_ERROR, "Failed to start NTP sync thread — timecode will "
+				   "free-run on the LOCAL clock (no sync)!");
 	}
 }
 
@@ -647,8 +613,7 @@ static tc_framerate_t detect_obs_framerate(void)
 
 static bool fps_setting_valid(int setting)
 {
-	return setting == TC_FPS_24 || setting == TC_FPS_25 ||
-	       setting == TC_FPS_29_97_DF || setting == TC_FPS_30 ||
+	return setting == TC_FPS_24 || setting == TC_FPS_25 || setting == TC_FPS_29_97_DF || setting == TC_FPS_30 ||
 	       setting == TC_FPS_50 || setting == TC_FPS_60;
 }
 
@@ -762,8 +727,7 @@ static void encode_next_frame(struct ltc_source_context *ctx)
 	 * next successful measurement instantly mid-take would put a hard
 	 * TC jump into the file. The only exception is the very first
 	 * encoder frame after creation, where no continuity exists yet. */
-	bool initial_sync = (!ctx->frame_valid) ||
-			    (!ctx->first_sync_done && !recording);
+	bool initial_sync = (!ctx->frame_valid) || (!ctx->first_sync_done && !recording);
 
 	/* On NTP recovery after a failure, director resync, or recording
 	 * stop, jump to the new target instantly — but only when idle.
@@ -783,15 +747,12 @@ static void encode_next_frame(struct ltc_source_context *ctx)
 		if (recording) {
 			/* ≤25 ppm: allow a 1 ms step once per
 			 * SLEW_RECORDING_SEC_PER_MS seconds of media. */
-			uint64_t interval = (uint64_t)ctx->nominal_fps *
-					    SLEW_RECORDING_SEC_PER_MS;
+			uint64_t interval = (uint64_t)ctx->nominal_fps * SLEW_RECORDING_SEC_PER_MS;
 			step = (ctx->frames_encoded % interval == 0) ? 1 : 0;
 		} else {
 			step = SLEW_MS_PER_FRAME_IDLE;
 		}
-		ctx->ntp_offset_ms_applied = ntp_slew_step(
-			ctx->ntp_offset_ms_applied,
-			ctx->ntp_target_offset_ms, step);
+		ctx->ntp_offset_ms_applied = ntp_slew_step(ctx->ntp_offset_ms_applied, ctx->ntp_target_offset_ms, step);
 	}
 
 	int64_t sec, usec;
@@ -799,9 +760,8 @@ static void encode_next_frame(struct ltc_source_context *ctx)
 
 	smpte_timecode_t tc;
 	timecode_from_unix(sec, usec, ctx->framerate, &tc);
-	ltc_wrapper_set_timecode(ctx->encoder, tc.hours, tc.minutes,
-				 tc.seconds, tc.frames, tc.year, tc.month,
-				 tc.day, ctx->camera_id);
+	ltc_wrapper_set_timecode(ctx->encoder, tc.hours, tc.minutes, tc.seconds, tc.frames, tc.year, tc.month, tc.day,
+				 ctx->camera_id);
 
 #ifdef ENABLE_FRONTEND_API
 	{
@@ -811,9 +771,7 @@ static void encode_next_frame(struct ltc_source_context *ctx)
 	}
 #endif
 
-	ctx->frame_samples_total =
-		ltc_wrapper_encode_frame(ctx->encoder, ctx->frame_buf,
-					 MAX_FRAME_SAMPLES);
+	ctx->frame_samples_total = ltc_wrapper_encode_frame(ctx->encoder, ctx->frame_buf, MAX_FRAME_SAMPLES);
 
 	if (ctx->frame_samples_total > 0) {
 		ctx->frame_valid = true;
@@ -873,28 +831,22 @@ static void ltc_source_video_tick(void *data, float seconds)
 
 		int remaining_in_frame = ctx->frame_samples_total - ctx->frame_pos;
 		int remaining_in_buf = samples_needed - buf_pos;
-		int to_copy = remaining_in_frame < remaining_in_buf
-				      ? remaining_in_frame
-				      : remaining_in_buf;
+		int to_copy = remaining_in_frame < remaining_in_buf ? remaining_in_frame : remaining_in_buf;
 
-		memcpy(&ctx->audio_buf[buf_pos],
-		       &ctx->frame_buf[ctx->frame_pos],
-		       (size_t)to_copy * sizeof(float));
+		memcpy(&ctx->audio_buf[buf_pos], &ctx->frame_buf[ctx->frame_pos], (size_t)to_copy * sizeof(float));
 
 		buf_pos += to_copy;
 		ctx->frame_pos += to_copy;
 	}
 
 	if (buf_pos < samples_needed) {
-		memset(&ctx->audio_buf[buf_pos], 0,
-		       (size_t)(samples_needed - buf_pos) * sizeof(float));
+		memset(&ctx->audio_buf[buf_pos], 0, (size_t)(samples_needed - buf_pos) * sizeof(float));
 	}
 
 	pthread_mutex_unlock(&ctx->encoder_mutex);
 
 	uint64_t now = os_gettime_ns();
-	if (ctx->next_audio_ts == 0 ||
-	    now > ctx->next_audio_ts + 200000000ULL ||
+	if (ctx->next_audio_ts == 0 || now > ctx->next_audio_ts + 200000000ULL ||
 	    ctx->next_audio_ts > now + 200000000ULL) {
 		ctx->next_audio_ts = now;
 	}
@@ -973,8 +925,7 @@ static void *ltc_source_create(obs_data_t *settings, obs_source_t *source)
 	ctx->audio_track = (int)obs_data_get_int(settings, S_AUDIO_TRACK);
 	if (ctx->audio_track < 1 || ctx->audio_track > 6)
 		ctx->audio_track = 3;
-	obs_source_set_audio_mixers(source,
-				    (uint32_t)(1 << (ctx->audio_track - 1)));
+	obs_source_set_audio_mixers(source, (uint32_t)(1 << (ctx->audio_track - 1)));
 
 	create_encoder(ctx);
 	start_ntp_thread(ctx);
@@ -983,10 +934,8 @@ static void *ltc_source_create(obs_data_t *settings, obs_source_t *source)
 	ctx->metadata = metadata_writer_create();
 #endif
 
-	obs_log(LOG_INFO,
-		"LTC source created (fps=%d, server=%s, interval=%ds, track=%d)",
-		ctx->nominal_fps, ctx->ntp_server, ctx->sync_interval_sec,
-		ctx->audio_track);
+	obs_log(LOG_INFO, "LTC source created (fps=%d, server=%s, interval=%ds, track=%d)", ctx->nominal_fps,
+		ctx->ntp_server, ctx->sync_interval_sec, ctx->audio_track);
 
 	return ctx;
 }
@@ -1038,10 +987,8 @@ static void ltc_source_update(void *data, obs_data_t *settings)
 	bool server_changed = false;
 	if (server && *server) {
 		pthread_mutex_lock(&ctx->encoder_mutex);
-		if (strncmp(ctx->ntp_server, server,
-			    sizeof(ctx->ntp_server)) != 0) {
-			snprintf(ctx->ntp_server, sizeof(ctx->ntp_server),
-				 "%s", server);
+		if (strncmp(ctx->ntp_server, server, sizeof(ctx->ntp_server)) != 0) {
+			snprintf(ctx->ntp_server, sizeof(ctx->ntp_server), "%s", server);
 			server_changed = true;
 		}
 		pthread_mutex_unlock(&ctx->encoder_mutex);
@@ -1068,14 +1015,10 @@ static void ltc_source_update(void *data, obs_data_t *settings)
 
 	/* Audio track routing */
 	int new_track = (int)obs_data_get_int(settings, S_AUDIO_TRACK);
-	if (new_track >= 1 && new_track <= 6 &&
-	    new_track != ctx->audio_track) {
+	if (new_track >= 1 && new_track <= 6 && new_track != ctx->audio_track) {
 		ctx->audio_track = new_track;
-		obs_source_set_audio_mixers(
-			ctx->source,
-			(uint32_t)(1 << (ctx->audio_track - 1)));
-		obs_log(LOG_INFO, "LTC audio track changed to %d",
-			ctx->audio_track);
+		obs_source_set_audio_mixers(ctx->source, (uint32_t)(1 << (ctx->audio_track - 1)));
+		obs_log(LOG_INFO, "LTC audio track changed to %d", ctx->audio_track);
 	}
 
 	/* Restart NTP thread to pick up new server immediately */
@@ -1102,10 +1045,8 @@ static void ltc_source_update(void *data, obs_data_t *settings)
 		default:
 			break;
 		}
-		metadata_writer_set_info(ctx->metadata, ctx->camera_id,
-					fps_label_str(ctx->framerate),
-					ctx->ntp_server, ctx->ntp_synced,
-					ctx->ntp_last_raw_offset_ms, sync_str);
+		metadata_writer_set_info(ctx->metadata, ctx->camera_id, fps_label_str(ctx->framerate), ctx->ntp_server,
+					 ctx->ntp_synced, ctx->ntp_last_raw_offset_ms, sync_str);
 	}
 #endif
 }
@@ -1118,9 +1059,8 @@ static obs_properties_t *ltc_source_get_properties(void *data)
 	obs_properties_t *props = obs_properties_create();
 
 	/* Framerate dropdown */
-	obs_property_t *fps_prop = obs_properties_add_list(
-		props, S_FRAMERATE, obs_module_text("Framerate"),
-		OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+	obs_property_t *fps_prop = obs_properties_add_list(props, S_FRAMERATE, obs_module_text("Framerate"),
+							   OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
 	obs_property_list_add_int(fps_prop, obs_module_text("FramerateAuto"), 0);
 	obs_property_list_add_int(fps_prop, "24 fps", TC_FPS_24);
 	obs_property_list_add_int(fps_prop, "25 fps", TC_FPS_25);
@@ -1130,22 +1070,19 @@ static obs_properties_t *ltc_source_get_properties(void *data)
 	obs_property_list_add_int(fps_prop, "60 fps", TC_FPS_60);
 
 	/* NTP server */
-	obs_properties_add_text(props, S_NTP_SERVER,
-				obs_module_text("NTPServer"), OBS_TEXT_DEFAULT);
+	obs_properties_add_text(props, S_NTP_SERVER, obs_module_text("NTPServer"), OBS_TEXT_DEFAULT);
 
 	/* Sync interval dropdown */
 	obs_property_t *interval_prop = obs_properties_add_list(
-		props, S_SYNC_INTERVAL, obs_module_text("NTPSyncInterval"),
-		OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+		props, S_SYNC_INTERVAL, obs_module_text("NTPSyncInterval"), OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
 	obs_property_list_add_int(interval_prop, "1 min", 60);
 	obs_property_list_add_int(interval_prop, "5 min", 300);
 	obs_property_list_add_int(interval_prop, "10 min", 600);
 	obs_property_list_add_int(interval_prop, "30 min", 1800);
 
 	/* Camera ID dropdown (A-P, 16 values — fits in LTC user7 4-bit field) */
-	obs_property_t *cam_prop = obs_properties_add_list(
-		props, S_CAMERA_ID, obs_module_text("CameraID"),
-		OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+	obs_property_t *cam_prop = obs_properties_add_list(props, S_CAMERA_ID, obs_module_text("CameraID"),
+							   OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
 	for (int i = 0; i < 16; i++) {
 		char label[16];
 		snprintf(label, sizeof(label), "Kamera %c", 'A' + i);
@@ -1153,9 +1090,8 @@ static obs_properties_t *ltc_source_get_properties(void *data)
 	}
 
 	/* Audio track selection */
-	obs_property_t *track_prop = obs_properties_add_list(
-		props, S_AUDIO_TRACK, obs_module_text("AudioTrack"),
-		OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+	obs_property_t *track_prop = obs_properties_add_list(props, S_AUDIO_TRACK, obs_module_text("AudioTrack"),
+							     OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
 	obs_property_list_add_int(track_prop, "Track 1", 1);
 	obs_property_list_add_int(track_prop, "Track 2", 2);
 	obs_property_list_add_int(track_prop, "Track 3", 3);
@@ -1168,23 +1104,15 @@ static obs_properties_t *ltc_source_get_properties(void *data)
 	if (ctx) {
 		config_t *profile = obs_frontend_get_profile_config();
 		if (profile) {
-			uint64_t simple_tracks =
-				config_get_uint(profile, "SimpleOutput",
-						"RecTracks");
-			uint64_t adv_tracks =
-				config_get_uint(profile, "AdvOut",
-						"RecTracks");
+			uint64_t simple_tracks = config_get_uint(profile, "SimpleOutput", "RecTracks");
+			uint64_t adv_tracks = config_get_uint(profile, "AdvOut", "RecTracks");
 			/* Combine both — user may be in either output mode */
 			uint64_t rec_tracks = simple_tracks | adv_tracks;
-			uint64_t track_bit =
-				(uint64_t)(1 << (ctx->audio_track - 1));
+			uint64_t track_bit = (uint64_t)(1 << (ctx->audio_track - 1));
 
-			if (rec_tracks > 0 &&
-			    !(rec_tracks & track_bit)) {
-				obs_properties_add_text(
-					props, "_track_warning",
-					obs_module_text("TrackNotRecorded"),
-					OBS_TEXT_INFO);
+			if (rec_tracks > 0 && !(rec_tracks & track_bit)) {
+				obs_properties_add_text(props, "_track_warning", obs_module_text("TrackNotRecorded"),
+							OBS_TEXT_INFO);
 			}
 		}
 	}
@@ -1194,8 +1122,7 @@ static obs_properties_t *ltc_source_get_properties(void *data)
 	 * all failed). Shown above the status line so non-technical operators
 	 * can't miss it. */
 	if (ctx && !ctx->ntp_synced && ctx->consecutive_sync_failures > 0) {
-		obs_properties_add_text(props, "_ntp_degraded_warning",
-					obs_module_text("NTPDegradedWarning"),
+		obs_properties_add_text(props, "_ntp_degraded_warning", obs_module_text("NTPDegradedWarning"),
 					OBS_TEXT_INFO);
 	}
 
@@ -1212,25 +1139,17 @@ static obs_properties_t *ltc_source_get_properties(void *data)
 		uint64_t last_ns = ctx->ntp_last_sync_ns;
 		if (last_ns) {
 			uint64_t now_ns = os_gettime_ns();
-			age = (int)(((now_ns > last_ns) ? now_ns - last_ns
-						        : 0) /
-				    1000000000ULL);
+			age = (int)(((now_ns > last_ns) ? now_ns - last_ns : 0) / 1000000000ULL);
 		}
 		if (!ctx->ntp_synced)
-			snprintf(status_buf, sizeof(status_buf), "%s",
-				 obs_module_text("NTPNotSynced"));
+			snprintf(status_buf, sizeof(status_buf), "%s", obs_module_text("NTPNotSynced"));
 		else if (ctx->sync_method == SYNC_METHOD_HTTP)
-			snprintf(status_buf, sizeof(status_buf),
-				 obs_module_text("HTTPSynced"), off, age);
+			snprintf(status_buf, sizeof(status_buf), obs_module_text("HTTPSynced"), off, age);
 		else
-			snprintf(status_buf, sizeof(status_buf),
-				 obs_module_text("NTPSynced"), off, age, rtt);
-		obs_properties_add_text(props, "_ntp_status", status_buf,
-					OBS_TEXT_INFO);
+			snprintf(status_buf, sizeof(status_buf), obs_module_text("NTPSynced"), off, age, rtt);
+		obs_properties_add_text(props, "_ntp_status", status_buf, OBS_TEXT_INFO);
 	} else {
-		obs_properties_add_text(props, "_ntp_status",
-					obs_module_text("NTPStatus"),
-					OBS_TEXT_INFO);
+		obs_properties_add_text(props, "_ntp_status", obs_module_text("NTPStatus"), OBS_TEXT_INFO);
 	}
 
 	/* Current timecode — live snapshot, plus one dense support line that
@@ -1247,24 +1166,18 @@ static obs_properties_t *ltc_source_get_properties(void *data)
 		timecode_to_string(&tc, tc_buf, sizeof(tc_buf));
 
 		char tc_label[64];
-		snprintf(tc_label, sizeof(tc_label), "%s: %s",
-			 obs_module_text("CurrentTimecode"), tc_buf);
-		obs_properties_add_text(props, "_timecode", tc_label,
-					OBS_TEXT_INFO);
+		snprintf(tc_label, sizeof(tc_label), "%s: %s", obs_module_text("CurrentTimecode"), tc_buf);
+		obs_properties_add_text(props, "_timecode", tc_label, OBS_TEXT_INFO);
 
 		const char *method_str = "LOCAL";
 		if (ctx->ntp_synced)
-			method_str = (ctx->sync_method == SYNC_METHOD_HTTP)
-					     ? "HTTP"
-					     : "NTP";
+			method_str = (ctx->sync_method == SYNC_METHOD_HTTP) ? "HTTP" : "NTP";
 		char age_str[16];
 		uint64_t last_ns = ctx->ntp_last_sync_ns;
 		if (last_ns) {
 			uint64_t now_ns = os_gettime_ns();
 			snprintf(age_str, sizeof(age_str), "@%ds",
-				 (int)(((now_ns > last_ns) ? now_ns - last_ns
-							   : 0) /
-				       1000000000ULL));
+				 (int)(((now_ns > last_ns) ? now_ns - last_ns : 0) / 1000000000ULL));
 		} else {
 			snprintf(age_str, sizeof(age_str), "@-");
 		}
@@ -1273,17 +1186,12 @@ static obs_properties_t *ltc_source_get_properties(void *data)
 		snprintf(support, sizeof(support),
 			 "%s\nobs-ltc-timecode v%s | Cam %c | %d fps | Track %d | "
 			 "%s %+d ms %s RTT %d ms | TC %s",
-			 obs_module_text("SupportInfo"), PLUGIN_VERSION,
-			 'A' + ctx->camera_id, ctx->nominal_fps,
-			 ctx->audio_track, method_str,
-			 (int)ctx->ntp_last_raw_offset_ms, age_str,
+			 obs_module_text("SupportInfo"), PLUGIN_VERSION, 'A' + ctx->camera_id, ctx->nominal_fps,
+			 ctx->audio_track, method_str, (int)ctx->ntp_last_raw_offset_ms, age_str,
 			 (int)ctx->ntp_roundtrip_ms, tc_buf);
-		obs_properties_add_text(props, "_support_info", support,
-					OBS_TEXT_INFO);
+		obs_properties_add_text(props, "_support_info", support, OBS_TEXT_INFO);
 	} else {
-		obs_properties_add_text(props, "_timecode",
-					obs_module_text("CurrentTimecode"),
-					OBS_TEXT_INFO);
+		obs_properties_add_text(props, "_timecode", obs_module_text("CurrentTimecode"), OBS_TEXT_INFO);
 	}
 
 	return props;
@@ -1330,8 +1238,7 @@ static bool diag_accessor_cb(void *data, obs_source_t *source)
 	if (!src_id || strcmp(src_id, "obs_ltc_timecode_source") != 0)
 		return true;
 
-	struct ltc_source_context *ctx =
-		(struct ltc_source_context *)obs_obj_get_data(source);
+	struct ltc_source_context *ctx = (struct ltc_source_context *)obs_obj_get_data(source);
 	if (!ctx)
 		return true;
 
@@ -1384,10 +1291,8 @@ bool ltc_source_get_diag(ltc_diag_t *out)
 /* Back-compat wrapper around ltc_source_get_diag() — reports the latest
  * RAW measurement (not the slewed applied value): directors need actual
  * sync quality, slewing only changes how fast the encoder absorbs it. */
-bool ltc_source_get_current_offset(int64_t *offset_ms, int *sync_method,
-				   bool *synced, int64_t *raw_offset_ms,
-				   int *offset_age_sec,
-				   bool *sync_lost_in_session)
+bool ltc_source_get_current_offset(int64_t *offset_ms, int *sync_method, bool *synced, int64_t *raw_offset_ms,
+				   int *offset_age_sec, bool *sync_lost_in_session)
 {
 	ltc_diag_t d;
 	bool found = ltc_source_get_diag(&d);
@@ -1419,8 +1324,7 @@ static bool kick_resync_cb(void *data, obs_source_t *source)
 	if (!src_id || strcmp(src_id, "obs_ltc_timecode_source") != 0)
 		return true;
 
-	struct ltc_source_context *ctx =
-		(struct ltc_source_context *)obs_obj_get_data(source);
+	struct ltc_source_context *ctx = (struct ltc_source_context *)obs_obj_get_data(source);
 	if (!ctx || !ctx->resync_event)
 		return true;
 
@@ -1450,8 +1354,7 @@ static bool signal_recording_stopped_cb(void *data, obs_source_t *source)
 	if (!src_id || strcmp(src_id, "obs_ltc_timecode_source") != 0)
 		return true;
 
-	struct ltc_source_context *ctx =
-		(struct ltc_source_context *)obs_obj_get_data(source);
+	struct ltc_source_context *ctx = (struct ltc_source_context *)obs_obj_get_data(source);
 	if (!ctx)
 		return true;
 

@@ -47,11 +47,8 @@ metadata_writer_t *metadata_writer_create(void);
  * Update metadata fields. Call whenever settings change.
  * All string parameters are copied internally.
  */
-void metadata_writer_set_info(metadata_writer_t *mw, int camera_id,
-			      const char *framerate_str,
-			      const char *ntp_server, bool ntp_synced,
-			      int64_t ntp_offset_ms,
-			      const char *sync_method_str);
+void metadata_writer_set_info(metadata_writer_t *mw, int camera_id, const char *framerate_str, const char *ntp_server,
+			      bool ntp_synced, int64_t ntp_offset_ms, const char *sync_method_str);
 
 /*
  * Update the current timecode string for sidecar output.

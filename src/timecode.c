@@ -28,8 +28,7 @@ static void civil_from_days(int64_t day_count, int *y, int *m, int *d)
 	day_count += 719468;
 	int64_t era = (day_count >= 0 ? day_count : day_count - 146096) / 146097;
 	int64_t doe = day_count - era * 146097;
-	int64_t yoe =
-		(doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+	int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
 	*y = (int)(yoe + era * 400);
 	int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
 	int64_t mp = (5 * doy + 2) / 153;

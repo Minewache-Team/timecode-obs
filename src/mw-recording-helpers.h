@@ -95,20 +95,10 @@ int mw_json_escape_string(char *dst, size_t dstsz, const char *src);
  * Returns the number of characters written (excluding the null terminator),
  * or -1 on truncation/error. Buf is always null-terminated when bufsz > 0.
  */
-int mw_build_heartbeat_body(char *buf, size_t bufsz,
-			    const char *name,
-			    bool recording_active,
-			    bool have_offset,
-			    int64_t offset_ms,
-			    int sync_method,
-			    bool synced,
-			    int64_t raw_offset_ms,
-			    int offset_age_sec,
-			    const char *plugin_version,
-			    bool sync_lost_in_session,
-			    int64_t rtt_ms,
-			    int64_t applied_delta_ms,
-			    int64_t initial_skew_ms);
+int mw_build_heartbeat_body(char *buf, size_t bufsz, const char *name, bool recording_active, bool have_offset,
+			    int64_t offset_ms, int sync_method, bool synced, int64_t raw_offset_ms, int offset_age_sec,
+			    const char *plugin_version, bool sync_lost_in_session, int64_t rtt_ms,
+			    int64_t applied_delta_ms, int64_t initial_skew_ms);
 
 /*
  * Detect a director-issued re-sync command in the API response.

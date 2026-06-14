@@ -54,8 +54,9 @@ bool obs_module_load(void)
 	mw_recording_init();
 #endif
 
-	obs_log(LOG_INFO, "plugin loaded successfully (version %s) — "
-			  "source 'LTC Timecode Generator' registered",
+	obs_log(LOG_INFO,
+		"plugin loaded successfully (version %s) — "
+		"source 'LTC Timecode Generator' registered",
 		PLUGIN_VERSION);
 	return true;
 }

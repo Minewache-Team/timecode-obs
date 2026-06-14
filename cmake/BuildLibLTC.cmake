@@ -10,7 +10,8 @@ if(NOT EXISTS "${LIBLTC_DIR}/src/ltc.h")
 endif()
 
 add_library(
-  libltc SHARED
+  libltc
+  SHARED
   "${LIBLTC_DIR}/src/ltc.c"
   "${LIBLTC_DIR}/src/encoder.c"
   "${LIBLTC_DIR}/src/decoder.c"
@@ -39,18 +40,24 @@ endif()
 
 set_target_properties(libltc PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# The plugin links libltc and needs its public API symbols (ltc_encoder_*) to be
+# exported from the shared library. The project sets a global hidden visibility
+# preset (CMAKE_C_VISIBILITY_PRESET) which would otherwise hide every libltc
+# symbol. On Windows this is handled by libltc.def; on macOS the linker rejects
+# undefined symbols, so the plugin link fails unless libltc exports them. Force
+# default visibility for this third-party target only (the plugin itself keeps
+# hidden visibility).
+set_target_properties(libltc PROPERTIES C_VISIBILITY_PRESET default VISIBILITY_INLINES_HIDDEN FALSE)
+
 # Set output directories so the shared lib ends up next to the plugin
-set_target_properties(libltc PROPERTIES
-  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
-  LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+set_target_properties(
+  libltc
+  PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 
 # macOS: set install name so the dylib can be found via @rpath
 if(APPLE)
-  set_target_properties(libltc PROPERTIES
-    INSTALL_NAME_DIR "@rpath"
-    BUILD_WITH_INSTALL_RPATH TRUE
-  )
+  set_target_properties(libltc PROPERTIES INSTALL_NAME_DIR "@rpath" BUILD_WITH_INSTALL_RPATH TRUE)
 endif()
 
 # Install libltc shared library alongside the plugin for each platform.
@@ -70,9 +77,17 @@ if(EXISTS "${LIBLTC_LICENSE}")
   if(WIN32)
     install(FILES "${LIBLTC_LICENSE}" DESTINATION "${CMAKE_PROJECT_NAME}/licenses/libltc" RENAME "COPYING.LGPLv3")
   elseif(APPLE)
-    install(FILES "${LIBLTC_LICENSE}" DESTINATION "${CMAKE_PROJECT_NAME}.plugin/Contents/Resources/licenses/libltc" RENAME "COPYING.LGPLv3")
+    install(
+      FILES "${LIBLTC_LICENSE}"
+      DESTINATION "${CMAKE_PROJECT_NAME}.plugin/Contents/Resources/licenses/libltc"
+      RENAME "COPYING.LGPLv3"
+    )
   else()
     include(GNUInstallDirs)
-    install(FILES "${LIBLTC_LICENSE}" DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/doc/${CMAKE_PROJECT_NAME}/licenses/libltc RENAME "COPYING.LGPLv3")
+    install(
+      FILES "${LIBLTC_LICENSE}"
+      DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/doc/${CMAKE_PROJECT_NAME}/licenses/libltc
+      RENAME "COPYING.LGPLv3"
+    )
   endif()
 endif()

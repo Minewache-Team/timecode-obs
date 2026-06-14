@@ -21,8 +21,7 @@ TEST(LTCRoundtripTest, CreateDestroy)
 
 TEST(LTCRoundtripTest, CreateAllFramerates)
 {
-	tc_framerate_t rates[] = {TC_FPS_24, TC_FPS_25, TC_FPS_29_97_DF,
-				  TC_FPS_30, TC_FPS_50, TC_FPS_60};
+	tc_framerate_t rates[] = {TC_FPS_24, TC_FPS_25, TC_FPS_29_97_DF, TC_FPS_30, TC_FPS_50, TC_FPS_60};
 	for (auto r : rates) {
 		ltc_wrapper_t *w = ltc_wrapper_create(48000, r);
 		ASSERT_NE(w, nullptr) << "Failed for framerate enum " << (int)r;
@@ -260,8 +259,7 @@ TEST(LTCRoundtripTest, ContinuousTimecodeSequence25fps)
 		int samples = ltc_wrapper_encode_frame(w, buffer, 4800);
 		ASSERT_GT(samples, 0) << "Frame " << f << " encode failed";
 
-		memcpy(&all_audio[total_samples], buffer,
-		       (size_t)samples * sizeof(float));
+		memcpy(&all_audio[total_samples], buffer, (size_t)samples * sizeof(float));
 		total_samples += samples;
 
 		ltc_wrapper_inc_timecode(w);
@@ -270,8 +268,7 @@ TEST(LTCRoundtripTest, ContinuousTimecodeSequence25fps)
 	/* Convert to byte samples for decoder */
 	ltcsnd_sample_t *byte_buf = new ltcsnd_sample_t[total_samples];
 	for (int i = 0; i < total_samples; i++) {
-		byte_buf[i] =
-			(ltcsnd_sample_t)((all_audio[i] * 128.0f) + 128.0f);
+		byte_buf[i] = (ltcsnd_sample_t)((all_audio[i] * 128.0f) + 128.0f);
 	}
 
 	/* Decode and verify sequence continuity */
@@ -288,30 +285,23 @@ TEST(LTCRoundtripTest, ContinuousTimecodeSequence25fps)
 		SMPTETimecode stime;
 		ltc_frame_to_time(&stime, &frame.ltc, 0);
 
-		int total_frames = stime.hours * 3600 * fps +
-				   stime.mins * 60 * fps +
-				   stime.secs * fps + stime.frame;
+		int total_frames = stime.hours * 3600 * fps + stime.mins * 60 * fps + stime.secs * fps + stime.frame;
 
 		if (prev_total_frames >= 0) {
 			int expected = prev_total_frames + 1;
 			/* Handle midnight rollover: 24*3600*25 = 2160000 */
 			if (expected >= 24 * 3600 * fps)
 				expected = 0;
-			EXPECT_EQ(total_frames, expected)
-				<< "Timecode discontinuity at decoded frame "
-				<< decoded_count << ": "
-				<< (int)stime.hours << ":"
-				<< (int)stime.mins << ":"
-				<< (int)stime.secs << ":"
-				<< (int)stime.frame;
+			EXPECT_EQ(total_frames, expected) << "Timecode discontinuity at decoded frame " << decoded_count
+							  << ": " << (int)stime.hours << ":" << (int)stime.mins << ":"
+							  << (int)stime.secs << ":" << (int)stime.frame;
 		}
 
 		prev_total_frames = total_frames;
 		decoded_count++;
 	}
 
-	EXPECT_GT(decoded_count, 5)
-		<< "Expected to decode multiple consecutive frames for continuity check";
+	EXPECT_GT(decoded_count, 5) << "Expected to decode multiple consecutive frames for continuity check";
 
 	delete[] all_audio;
 	delete[] byte_buf;
@@ -350,16 +340,11 @@ TEST(LTCRoundtripTest, SetTimecodeEveryFrameIsContinuous)
 		while (ltc_decoder_read(decoder, &frame)) {
 			SMPTETimecode stime;
 			ltc_frame_to_time(&stime, &frame.ltc, 0);
-			int64_t idx = ((stime.hours * 60 + stime.mins) * 60 +
-				       stime.secs) * (int64_t)fps + stime.frame;
+			int64_t idx = ((stime.hours * 60 + stime.mins) * 60 + stime.secs) * (int64_t)fps + stime.frame;
 			if (prev_idx >= 0) {
-				EXPECT_EQ(idx, prev_idx + 1)
-					<< "TC discontinuity at decoded frame "
-					<< decoded_count << ": "
-					<< (int)stime.hours << ":"
-					<< (int)stime.mins << ":"
-					<< (int)stime.secs << ":"
-					<< (int)stime.frame;
+				EXPECT_EQ(idx, prev_idx + 1) << "TC discontinuity at decoded frame " << decoded_count
+							     << ": " << (int)stime.hours << ":" << (int)stime.mins
+							     << ":" << (int)stime.secs << ":" << (int)stime.frame;
 			}
 			prev_idx = idx;
 			decoded_count++;
@@ -375,8 +360,7 @@ TEST(LTCRoundtripTest, SetTimecodeEveryFrameIsContinuous)
 		int n = ltc_wrapper_encode_frame(w, buffer, 4800);
 		ASSERT_GT(n, 0);
 		for (int j = 0; j < n; j++) {
-			byte_buf[j] = (ltcsnd_sample_t)((buffer[j] * 128.0f) +
-							128.0f);
+			byte_buf[j] = (ltcsnd_sample_t)((buffer[j] * 128.0f) + 128.0f);
 		}
 		ltc_decoder_write(decoder, byte_buf, (size_t)n, 0);
 		drain();
@@ -390,9 +374,8 @@ TEST(LTCRoundtripTest, SetTimecodeEveryFrameIsContinuous)
 	}
 	drain();
 
-	EXPECT_GT(decoded_count, num_frames - 5)
-		<< "Expected to decode nearly all frames from the "
-		   "set_timecode-per-frame stream";
+	EXPECT_GT(decoded_count, num_frames - 5) << "Expected to decode nearly all frames from the "
+						    "set_timecode-per-frame stream";
 
 	ltc_decoder_free(decoder);
 	ltc_wrapper_destroy(w);
@@ -423,16 +406,14 @@ TEST(LTCRoundtripTest, CameraIDUpperRangeRoundtrip)
 			float buffer[4800];
 			int samples = ltc_wrapper_encode_frame(w, buffer, 4800);
 			ASSERT_GT(samples, 0);
-			memcpy(&all_audio[total_samples], buffer,
-			       (size_t)samples * sizeof(float));
+			memcpy(&all_audio[total_samples], buffer, (size_t)samples * sizeof(float));
 			total_samples += samples;
 			ltc_wrapper_inc_timecode(w);
 		}
 
 		ltcsnd_sample_t *byte_buf = new ltcsnd_sample_t[total_samples];
 		for (int i = 0; i < total_samples; i++) {
-			byte_buf[i] = (ltcsnd_sample_t)((all_audio[i] * 128.0f) +
-							128.0f);
+			byte_buf[i] = (ltcsnd_sample_t)((all_audio[i] * 128.0f) + 128.0f);
 		}
 
 		LTCDecoder *decoder = ltc_decoder_create(spf, 32);
@@ -443,15 +424,12 @@ TEST(LTCRoundtripTest, CameraIDUpperRangeRoundtrip)
 		bool decoded = false;
 		while (ltc_decoder_read(decoder, &frame)) {
 			EXPECT_EQ(frame.ltc.user7, (unsigned)camera_id)
-				<< "camera_id " << camera_id
-				<< " did not survive the roundtrip";
+				<< "camera_id " << camera_id << " did not survive the roundtrip";
 			EXPECT_EQ(frame.ltc.user8, 0u);
 			decoded = true;
 			break;
 		}
-		EXPECT_TRUE(decoded)
-			<< "Failed to decode LTC frames for camera_id "
-			<< camera_id;
+		EXPECT_TRUE(decoded) << "Failed to decode LTC frames for camera_id " << camera_id;
 
 		delete[] all_audio;
 		delete[] byte_buf;
@@ -485,8 +463,7 @@ TEST(LTCRoundtripTest, DateAndCameraIDRoundtrip)
 		float buffer[4800];
 		int samples = ltc_wrapper_encode_frame(w, buffer, 4800);
 		ASSERT_GT(samples, 0);
-		memcpy(&all_audio[total_samples], buffer,
-		       (size_t)samples * sizeof(float));
+		memcpy(&all_audio[total_samples], buffer, (size_t)samples * sizeof(float));
 		total_samples += samples;
 		ltc_wrapper_inc_timecode(w);
 	}
@@ -494,8 +471,7 @@ TEST(LTCRoundtripTest, DateAndCameraIDRoundtrip)
 	/* Convert to byte samples and decode */
 	ltcsnd_sample_t *byte_buf = new ltcsnd_sample_t[total_samples];
 	for (int i = 0; i < total_samples; i++) {
-		byte_buf[i] =
-			(ltcsnd_sample_t)((all_audio[i] * 128.0f) + 128.0f);
+		byte_buf[i] = (ltcsnd_sample_t)((all_audio[i] * 128.0f) + 128.0f);
 	}
 
 	LTCDecoder *decoder = ltc_decoder_create(spf, 32);
@@ -521,8 +497,7 @@ TEST(LTCRoundtripTest, DateAndCameraIDRoundtrip)
 		decoded = true;
 		break;
 	}
-	EXPECT_TRUE(decoded)
-		<< "Failed to decode LTC frames for date/camera roundtrip";
+	EXPECT_TRUE(decoded) << "Failed to decode LTC frames for date/camera roundtrip";
 
 	delete[] all_audio;
 	delete[] byte_buf;

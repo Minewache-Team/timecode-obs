@@ -51,34 +51,35 @@ endif()
 
 target_sources(
   ${CMAKE_PROJECT_NAME}
-  PRIVATE src/plugin-main.c
-          src/ltc-source.c
-          src/ltc-source.h
-          src/ntp-client.c
-          src/ntp-client.h
-          src/timecode.c
-          src/timecode.h
-          src/ltc-encoder-wrapper.c
-          src/ltc-encoder-wrapper.h
-          src/auto-setup.c
-          src/auto-setup.h
-          src/http-time-client.c
-          src/http-time-client.h
-          src/metadata-writer.c
-          src/metadata-writer.h
-          src/mw-recording.c
-          src/mw-recording.h
-          src/mw-recording-helpers.c
-          src/mw-recording-helpers.h
+  PRIVATE
+    src/plugin-main.c
+    src/ltc-source.c
+    src/ltc-source.h
+    src/ntp-client.c
+    src/ntp-client.h
+    src/timecode.c
+    src/timecode.h
+    src/ltc-encoder-wrapper.c
+    src/ltc-encoder-wrapper.h
+    src/auto-setup.c
+    src/auto-setup.h
+    src/http-time-client.c
+    src/http-time-client.h
+    src/metadata-writer.c
+    src/metadata-writer.h
+    src/mw-recording.c
+    src/mw-recording.h
+    src/mw-recording-helpers.c
+    src/mw-recording-helpers.h
 )
 
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 # macOS: add rpath so plugin can find libltc.dylib inside the bundle's Frameworks/
 if(APPLE)
-  set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES
-    INSTALL_RPATH "@loader_path/../Frameworks"
-    BUILD_WITH_INSTALL_RPATH TRUE
+  set_target_properties(
+    ${CMAKE_PROJECT_NAME}
+    PROPERTIES INSTALL_RPATH "@loader_path/../Frameworks" BUILD_WITH_INSTALL_RPATH TRUE
   )
 endif()
 
@@ -86,10 +87,7 @@ endif()
 # (see install.sh). $ORIGIN makes the loader look in the plugin's own
 # directory, so no system-wide install or LD_LIBRARY_PATH is required.
 if(UNIX AND NOT APPLE)
-  set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES
-    INSTALL_RPATH "$ORIGIN"
-    BUILD_WITH_INSTALL_RPATH TRUE
-  )
+  set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES INSTALL_RPATH "$ORIGIN" BUILD_WITH_INSTALL_RPATH TRUE)
 endif()
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
