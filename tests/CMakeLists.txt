@@ -5,6 +5,12 @@ FetchContent_Declare(googletest GIT_REPOSITORY https://github.com/google/googlet
 # Prevent overriding the parent project's compiler/linker settings on Windows
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 
+# Don't emit googletest's own install() rules. Otherwise the release packaging
+# step (cmake --install, used by the macOS .pkg build) tries to install
+# gtest/gmock artifacts (e.g. libgmock.a) that aren't built and the install
+# fails. The plugin package must never ship googletest anyway.
+set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+
 FetchContent_MakeAvailable(googletest)
 
 # Include source directory for headers
