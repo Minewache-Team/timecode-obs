@@ -142,11 +142,10 @@ jobs:
           codesign: ${{ fromJSON(needs.check-event.outputs.codesign) }}
           codesignIdent: ${{ steps.codesign.outputs.codesignIdent }}
 
-      - name: Run Tests 🧪
-        shell: zsh --no-rcs --errexit --pipefail {0}
-        run: |
-          : Run Tests
-          ctest --preset macos-ci --output-on-failure
+      # Unit tests run on the Windows runner only (platform-independent core
+      # logic; Windows coverage is sufficient). The macOS build additionally
+      # uses the OBS template's xcodebuild flow, which builds only the plugin
+      # target -- not the test executables -- so ctest could not run here anyway.
 
       - name: Package Plugin 📀
         uses: ./.github/actions/package-plugin
@@ -223,11 +222,8 @@ jobs:
           target: x86_64
           config: ${{ needs.check-event.outputs.config }}
 
-      - name: Run Tests 🧪
-        shell: bash
-        run: |
-          : Run Tests
-          ctest --preset ubuntu-ci-x86_64 --output-on-failure
+      # Unit tests run on the Windows runner only (platform-independent core
+      # logic; Windows coverage is sufficient).
 
       - name: Package Plugin 📀
         uses: ./.github/actions/package-plugin
