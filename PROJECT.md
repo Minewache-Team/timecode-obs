@@ -1714,6 +1714,97 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 ---
 
+### Epic 19: Folgen-Statistik Redesign & Delivery Tracking
+
+> User feedback (2026-07-08): Der Regisseur verliert bei jedem Dreh Zeit damit,
+> aus dem Panel herauszulesen, wer an einer Folge teilgenommen hat und von wem
+> er die Aufnahmedatei schon hat. Die flache Tabellen-Folgenstatistik ist
+> unübersichtlich; die Szenen-Statistik ist ihm unwichtiger als die
+> Folgen-Statistik. Er schreibt die "Habe ich / Fehlt noch"-Liste bisher von
+> Hand als Discord-Nachricht und gleicht sie mit seinem Ordner ab. Ausdrücklicher
+> Wunsch: datenschutzkompatibel — keine neuen personenbezogenen Daten (keine
+> Discord-IDs; nur der bereits gespeicherte user_name).
+
+#### TICKET-076: Liefer-Status-Tabelle (episode_deliveries) + "Erhalten"-Haken
+- **Status:** `DONE`
+- **Type:** Feature (website-only)
+- **Description:** Neue Tabelle `episode_deliveries (season, episode, user_name,
+  received, updated_at)` mit `UNIQUE (season, episode, user_name)`. Speichert pro
+  Folge/Person, ob deren Aufnahmedatei schon beim Regisseur liegt. Identität =
+  `user_name` wie überall im System; kein neues personenbezogenes Datum
+  (DSGVO-neutral). Neuer Endpoint `dashboard-api.php?action=set_delivery` (Upsert
+  via `INSERT … ON DUPLICATE KEY UPDATE`).
+- **Acceptance Criteria:**
+  - [x] `install.php` legt `episode_deliveries` idempotent an (`IF NOT EXISTS`)
+  - [x] `set_delivery` validiert `season/episode >= 1` + nicht-leeren `sanitize_name`
+  - [x] Upsert erzeugt kein Duplikat; letzter Wert gilt
+  - [x] `bootstrap.php` truncatet die neue Tabelle zwischen Tests
+- **Files:** `website/install.php`, `website/dashboard-api.php`, `website/tests/bootstrap.php`
+
+#### TICKET-077: episode_stats erweitern + Staffel-Navigation-Daten
+- **Status:** `DONE`
+- **Depends on:** TICKET-076
+- **Type:** Feature (website-only)
+- **Description:** `handle_episode_stats()` entdoppelt Teilnehmer pro `user_name`
+  (repräsentative `camera_id` = neueste Session), merged den `received`-Status je
+  Teilnehmer, liefert `participant_count` pro Folge sowie top-level `seasons`
+  (distinct, absteigend) und `active_season`. Globale "aktive Staffel" als Dotfile
+  `.active_season` (analog `.latest_version_override`), gesetzt über neuen Endpoint
+  `set_active_season`.
+- **Acceptance Criteria:**
+  - [x] Teilnehmer pro `user_name` entdoppelt, neueste Kamera-ID gewinnt
+  - [x] `received` pro Teilnehmer korrekt aus `episode_deliveries`
+  - [x] `seasons` absteigend; `active_season` aus Dotfile (null wenn ungesetzt)
+  - [x] `set_active_season` schreibt/löscht Dotfile; `.active_season` gitignored
+- **Files:** `website/dashboard-api.php`, `.gitignore`
+
+#### TICKET-078: stats.php Karten-UI, Staffel-Nav, Erhalten-Haken, Discord-Copy
+- **Status:** `DONE`
+- **Depends on:** TICKET-077
+- **Type:** Feature (website-only)
+- **Description:** `stats.php` von flacher Tabelle auf Karten pro Folge umgebaut:
+  Kopf "Staffel X · Folge Y", Szenenzahl, Zeitraum, große Teilnehmerzahl; zwei
+  Gruppen "Habe ich ✅" / "Fehlt noch ❌" mit Erhalten-Häkchen (POSTet
+  `set_delivery`, optimistisch mit Fehler-Rollback). Staffel-Buttons (Klick
+  filtert, Standard = aktive Staffel bzw. neueste) plus setzbare aktive Staffel.
+  "Discord-Nachricht kopieren"-Button erzeugt Saros Vorlage mit den im Panel
+  eingetragenen Namen (keine User-IDs); Rollen-Ping als `DISCORD_ROLE_PING`
+  (Default in `db.php`, in `config.php` überschreibbar).
+- **Acceptance Criteria:**
+  - [x] Karten statt Tabelle; Teilnehmerzahl prominent
+  - [x] Staffel-Buttons + persistente aktive Staffel (Dotfile)
+  - [x] Erhalten-Haken verschiebt Chip zwischen "Habe ich"/"Fehlt noch"
+  - [x] Copy-Button erzeugt Habe-ich/Fehlen-Liste im gewünschten Format
+- **Files:** `website/stats.php`, `website/assets/style.css`, `website/includes/db.php`
+
+#### TICKET-079: scenes.php Teilnehmer nach user_name entdoppeln
+- **Status:** `DONE`
+- **Type:** Bugfix (website-only)
+- **Description:** Wer mitten in einer Szene Aufnahme stoppt/neu startet, erzeugt
+  zwei `sessions`-Einträge und erschien im Szenen-Archiv doppelt. Teilnehmer
+  werden jetzt pro `user_name` entdoppelt (Zeit gemergt: frühester Start,
+  spätestes Ende — offen/"läuft" gewinnt; repräsentative camera_id = neueste
+  Session). Betrifft Kompakt-Badges und die ausgeklappten Detailkarten.
+- **Acceptance Criteria:**
+  - [x] Person mit mehreren Sessions in einer Szene erscheint nur einmal
+  - [x] Zeit-Merge (min Start / max Ende, NULL=läuft gewinnt) korrekt
+- **Files:** `website/scenes.php`
+
+#### TICKET-080: Navigation — Folgen-Statistik als Landing
+- **Status:** `DONE`
+- **Type:** UX improvement (website-only)
+- **Description:** Der Nav-Eintrag "Szenen / Statistik" landet jetzt auf der
+  Folgen-Statistik (`stats.php`) statt auf dem Szenen-Archiv. Sub-Nav-Reihenfolge
+  überall: Folgen-Statistik zuerst, Szenen-Archiv als zweiter Tab. Top-Nav-Bug in
+  `stats.php` (falscher `active`-Link) behoben.
+- **Acceptance Criteria:**
+  - [x] `index.php` "Szenen / Statistik" → `stats.php`
+  - [x] Sub-Nav: Folgen-Statistik zuerst, Szenen-Archiv zweiter Tab
+  - [x] `stats.php` Top-Nav korrekt aktiv
+- **Files:** `website/index.php`, `website/stats.php`, `website/scenes.php`
+
+---
+
 ## Decision Log
 
 | Date | Ticket | Decision | Rationale | Alternatives Considered |
@@ -1786,6 +1877,9 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 | 2026-06-10 | TICKET-063 | Recording slew rate fixed to a true 25 ppm via frame-counter gating (1 ms per 40 s of media) | The 0.5.x value `1 ms/frame` was justified in the Decision Log as "25 ppm @ 25 fps" — a 1000× math error (it is 25,000 ppm). At that rate a stale start offset turns into a non-linear TC ramp inside the clip, which is why cutters saw material drift apart AFTER syncing on a TC point. With TICKET-059/063 closing offsets between takes, in-take slewing only needs to track OS-clock micro-drift (~20 ppm), so 25 ppm is sufficient AND decode-safe. | Freeze offset entirely during recording (loses OS-drift tracking on multi-hour takes), sub-ms slewing via µs-granular applied offset (larger refactor, same audible result) |
 | 2026-06-10 | TICKET-063 | `!first_sync_done` instant-apply and recovery edge both gated on `!recording`; edge no longer cleared when it can't be applied | The 3-failure reset (TICKET-040) made `!first_sync_done` true during recordings with flaky networks; recovery then hard-jumped TC mid-file — exactly the discontinuity class TICKET-008/036 forbid. Keeping the edge set until the first idle frame means recovery/resync intent is never silently dropped. | Apply with LOG_WARNING mid-recording (still corrupts the file), separate "pending jump" flag (duplicates `ntp_sync_recovered_edge` semantics) |
 | 2026-05-23 | TICKET-059 | Auto-jump applied → target on RECORDING_STOPPED via existing `ntp_sync_recovered_edge` trigger | The slewing-only model from Epic 17 can't bridge a multi-second OS-clock skew between takes — 50 s offset needs 200 s idle slewing at 10 ms/frame, way longer than directors wait between takes. Re-using the existing edge-trigger plumbing (set the flag, encoder applies on next idle frame) keeps the fix to ~30 lines and doesn't introduce a new code path that needs separate testing. The contract preserved: jump only when NOT recording, so no LTC discontinuity ever lands in a file. Guard on `first_sync_done` skips the case where NTP has never succeeded — the `initial_sync` path already handles that. | Speed up idle slewing rate to 100 ms/frame (still 5 s for 50 s skew, and an arbitrary number), trigger only via dashboard click (already exists, but requires director attention every take), do nothing (was the bug). |
+| 2026-07-08 | TICKET-076 | Delivery-Tracking keyed on `user_name`, participation derived from existing `sessions` (no crew/roster table, no Discord IDs) | User forderte ausdrücklich datenschutzkompatibel. Teilnahme ist bereits implizit in den Sessions (wer per OBS aufnahm); der einzige neue Zustand ist ein Boolean "Datei erhalten" pro (Folge, Name). Keine neue personenbezogene Datenkategorie → kein neuer Consent-Flow. `user_name` ist die überall genutzte Identität. | Crew/Roster-Master-Tabelle mit Soll-Besetzung (mehr Pflege, und die Soll-Besetzung ist aus OBS-Daten ohnehin nicht ableitbar), Discord-IDs speichern (neue PII, vom User explizit abgelehnt — "die haben wir gar nicht"). |
+| 2026-07-08 | TICKET-077 | "Aktive Staffel" als Dotfile `.active_season`, Staffel-Buttons rein transient (View-State) | Spiegelt das etablierte `.latest_version_override`-Muster (TICKET-060): ein einzelner globaler Regisseur-Wert, kein Nutzen einer DB-Tabelle oder Settings-Infrastruktur für einen Skalar. Server-seitig persistent = geräteübergreifend, im Gegensatz zu localStorage. Klare Semantik: Buttons wechseln die Ansicht kurzfristig, das Dotfile ist der persistente Standard beim Laden. | Settings-DB-Tabelle (Migration + Overhead für einen Wert), localStorage (pro-Browser, nicht geräteübergreifend), beides kombiniert mit localStorage-Override (Vorrang-Konflikt aktive-Staffel vs. zuletzt-gesehen — verwirrend). |
+| 2026-07-08 | TICKET-079 | Duplikate pro `user_name` beim Lesen entdoppeln (episode_stats + scenes.php), nicht beim Schreiben in `session_ids` | Die Roh-Session-IDs sind die Wahrheit (Stop/Neustart = echte separate Sessions mit eigener Sync-Historie); beim Schreiben zu entdoppeln würde diagnostische Information verwerfen, die Epic 15/18 auf Session-Ebene braucht. Anzeige-Dedup ist verlustfrei und lokal. episode_stats dedupte schon (`DISTINCT`), scenes.php nicht — daher der doppelte Auftritt nur im Archiv. | Beim Speichern der Szene dedupen (verliert Session-Granularität), DB-Constraint (Sessions sind legitim mehrfach), gar nicht fixen (bleibt unübersichtlich — user-gemeldet). |
 
 ---
 
@@ -1793,6 +1887,7 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 | Session | Date | Agent | Tickets Worked | Status at End | Notes |
 |---------|------|-------|----------------|---------------|-------|
+| 32 | 2026-07-08 | Claude (Opus 4.8) | TICKET-076, 077, 078, 079, 080 (all done) | Website Folgen-Statistik überarbeitet | Datenschutzkompatibles Redesign der Koordinations-Website nach User-Feedback (Reconciliation "wer hat teilgenommen / von wem habe ich die Datei" kostet bei jedem Dreh Zeit). (076) Neue Tabelle `episode_deliveries` (season, episode, user_name, received) + `set_delivery`-Upsert — nur ein Boolean zum bereits gespeicherten Namen, keine neue PII/keine Discord-IDs (DSGVO-neutral, explizit gefordert). (077) `episode_stats` entdoppelt Teilnehmer pro user_name (neueste Kamera gewinnt), merged `received`, liefert `participant_count` + `seasons`(desc) + `active_season`; globale aktive Staffel als Dotfile `.active_season` (Muster von `.latest_version_override`). (078) `stats.php` von flacher Tabelle → Karten pro Folge: große Teilnehmerzahl, Gruppen "Habe ich ✅"/"Fehlt noch ❌" mit Erhalten-Häkchen (optimistisch + Rollback), Staffel-Buttons + setzbare aktive Staffel, "Discord-Nachricht kopieren" in Saros exaktem Format (Panel-Namen statt IDs; Rollen-Ping `DISCORD_ROLE_PING` in db.php, in config.php überschreibbar). (079) `scenes.php` entdoppelt Teilnehmer pro user_name (Stop/Neustart erzeugte Doppel-Chips), Zeit-Merge min-Start/max-Ende. (080) "Szenen / Statistik"-Nav landet jetzt auf der Folgen-Statistik; Sub-Nav Folgen-Statistik zuerst. Verifikation: PHP-Lint sauber (8 Dateien); **14/14** end-to-end gegen echte MariaDB (Schema/Upsert/Dedup/received/Validierung/seasons via Standalone-Harness nach ResyncTest-Muster, da kein Docker-3307 + kein PHPUnit im Environment — XAMPP-MariaDB genutzt, Privilege-Tabellen dieser XAMPP-Instanz sind vorbestehend crashed, daher `--skip-grant-tables`); **6/6** scenes.php-Dedup-Logik; stats.php JS `node --check` grün. Neuer PHPUnit-Test `tests/DeliveryTest.php` für den regulären CI-Lauf (Docker-MariaDB) hinzugefügt. Keine Plugin-Code-Änderung. **Danach (User-Wunsch, da timecode-obs public ist): das gesamte Koordinations-Backend in ein eigenes PRIVATES Repo `Minewache-Team/mw-aufnahme-web` ausgelagert und aus diesem public Repo entfernt** (`website/`, `scripts/`, `docker-compose.test.yml`, CI-Workflows `php-tests.yaml`/`smoke-test.yaml`). Verifiziert: `config.php`/echte Secrets waren NIE in der Historie dieses Repos (Pfad- + Pickaxe- + Tree-Grep über alle 95 Commits/Refs) → kein History-Rewrite nötig. Rollen-ID aus dem public `db.php` in die private `config.php` verschoben. Follow-up-Fix im neuen Repo: `episode_stats` crashte, wenn die `episode_deliveries`-Tabelle auf einer bestehenden DB fehlte — jetzt graceful (Folgen erscheinen ohne Haken; `install.php` erneut ausführen legt die Tabelle an). Website-Arbeit läuft ab jetzt in `mw-aufnahme-web`, nicht mehr hier. |
 | 31 | 2026-06-10 | Claude (Fable) | TICKET-075 (done) | 0.6.3 ready | Gegenstück zu TICKET-074: maximale Ferndiagnose für Entwickler/Regisseur auf allen drei Kanälen, gespeist aus EINER Quelle (`ltc_diag_t`/`ltc_source_get_diag()`; alter Accessor bleibt als Wrapper). Heartbeat +3 Felder (rtt_ms = Leitungsqualität, applied_delta_ms = Live-TC-Restabweichung, initial_skew_ms = Boot-Uhrfehler, COALESCE-persistiert) mit Consent-Bump auf v3 nach TICKET-048-Verfahren (Dialog-Bullet, datenschutz.php v3 + neue Tabellenzeile + Re-Consent-Box). Dashboard rendert RTT (farbcodiert), TC-Abw. (> 1 Frame) und persistenten Uhr-Fehler-Hinweis (löst das deferred TICKET-044-Dashboard-Wiring ein). Pro erfolgreichem Sync-Zyklus eine INFO-Logzeile → jedes via OBS "Log hochladen" geteilte Log ist eine Mess-Historie des Abends. Sidecar +6 Post-Mortem-Felder. Server: idempotente Migrationen, Junk→NULL-Validierung, status+SSE-SELECTs. Verifikation: 4/4 C-Suiten grün (23 Callsites migriert, 2 neue Shape-Tests); erstmals voller lokaler DB-Lauf: **28/28 PHPUnit gegen echte MariaDB** (3 neue Fälle; install.php-Guard mit MW_TEST_MODE-Ausnahme dabei mitverifiziert). |
 | 30 | 2026-06-10 | Claude (Fable) | TICKET-074 (done) | 0.6.3 ready | Support-surface round after user context ("viele Nutzer sind strohdumm, sitzen aber WÄHREND der Nutzung im Discord mit Entwickler+Regisseur"). Consequence: the user-visible surface must be Discord-relay-grade, logs are unreachable for this audience. Shipped: de-DE.ini (full German locale — English-only warnings were de-facto invisible for this fleet; OBS picks it up on German installs, installers deploy data/ recursively anyway); warnings now carry instructions ("SOFORT im Discord melden") instead of just describing the condition; Properties status enriched with measurement age + RTT; new `_support_info` property = one dense line (version | Cam | fps | Track | method offset @age RTT | TC) explicitly labelled for screenshot/paste into Discord; auto-setup dialogs migrated MessageBoxA→W with \u escapes — UTF-8 umlauts through the ANSI API rendered "MÃ¶chtest" on German Windows since the first release (the MW dialogs got this fix in TICKET-030, auto-setup was missed). Verified: 4/4 ctest suites green, syntax-clean both frontend modes (only known system-libobs header warnings in container). |
 | 29 | 2026-06-10 | Claude (Fable) | TICKET-073 (done) | 0.6.3 ready | Family-line refinement after user clarification ("oft Familienanschlüsse — die Schwester streamt gerade Netflix"). (1) NTP-Sample-Gap 250 ms → 2000 ms: ABR-Player bursten segmentweise mit Sekunden-Pausen; drei Samples über ~4,5 s verteilt erwischen mit hoher Wahrscheinlichkeit eine Burst-Pause, eng beieinander liegende Samples sahen alle dieselbe Congestion (Min-RTT hatte nichts Besseres zur Auswahl). Kostet nur Zeit, wenn die Qualität ohnehin schlecht ist (GOOD-Sample → sofortiger Exit). (2) mw_http_post mit Timeout-Parameter: Heartbeat-Thread 10 s (eine über TLS-Setup stolpernde POST ließ die Kamera am Dashboard "offline" flackern, während sie sauber aufnimmt), Start/Stop/Consent bleiben bei 5 s weil sie auf dem OBS-UI-Thread laufen (sync curl im Frontend-Callback = vorbestehende Design-Warze, async-Dispatch als künftiges Ticket notiert). Log-Wording auf Haushalts-Realität angepasst ("Household line busy — someone streaming/uploading?"). 4/4 ctest-Suiten grün. |

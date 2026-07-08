@@ -26,25 +26,11 @@
 !CLAUDE.md
 !install.ps1
 !install.sh
-!/website
-!/scripts
-!docker-compose.test.yml
 
-# Credentials — never commit
-/website/includes/config.php
-
-# PHPUnit / Composer Build-Artefakte (TICKET-038).
-# composer.lock IS tracked (application project — reproducible installs).
-/website/vendor/
-/website/.phpunit.cache/
-
-# TICKET-058: GitHub-fetched latest-version cache (1 h TTL). Server-side
-# auto-refresh; never check into the repo.
-/website/.latest_version_cache
-
-# TICKET-060: Director-set override file (written via dashboard UI).
-# Server-side runtime state; never check into the repo.
-/website/.latest_version_override
+# Note: the coordination website moved to a private repo
+# (Minewache-Team/mw-aufnahme-web) on 2026-07-08. Its files, CI workflows,
+# and test infra (scripts/, docker-compose.test.yml) were removed from this
+# public repo. Secrets were never committed here (verified).
 
 # Exclude lock files
 *.lock.json

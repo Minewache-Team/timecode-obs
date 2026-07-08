@@ -111,8 +111,12 @@ ctest --preset ubuntu-x86_64
 - `data/locale/en-US.ini` — All user-visible strings. Add new strings here,
   reference via `obs_module_text("KEY")`.
 - `[MW] OBS KIT/` — Scene collection + profile shipped to MW team users.
-- `website/` — PHP/MySQL coordination backend (Epic 14). Lives at the
-  configured MW server URL. `config.php` is gitignored.
+- **Coordination website (moved out):** The PHP/MySQL coordination backend
+  (formerly `website/`, Epic 14–19) now lives in its own **private** repo
+  `Minewache-Team/mw-aufnahme-web` — this `timecode-obs` repo is public, so the
+  backend was extracted on 2026-07-08. Do website work there, not here. The
+  plugin still reports to it at the configured MW server URL. Secrets were never
+  committed to this public repo (verified).
 
 ## When in Doubt
 
