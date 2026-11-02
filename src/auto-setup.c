@@ -45,7 +45,10 @@
 
 /* TICKET-082: fixed UUIDs of the shipped kit. Identifying by UUID instead of
  * by name keeps the migration off any self-built collection. */
-#define CONFIG_KEY_KIT_GAME_AUDIO_DONE "kit_game_audio_done"
+/* Mandatory since 0.6.6: a new key, so a "no" given to the 0.6.5 prompt does
+ * not count. Keyed on the install, not on a version: whoever updates later
+ * from any older version still gets it. */
+#define CONFIG_KEY_KIT_GAME_AUDIO_DONE "kit_game_audio_applied"
 #define KIT_GAME_CAPTURE_UUID "b4d23cea-069d-412e-bf6c-84c495ae6c10"
 #define KIT_GAME_SOUNDS_UUID "3506fe35-9121-4192-a84b-feba658d54e7"
 #define KIT_LTC_TRACK_MIXER (1u << 2)
@@ -149,18 +152,17 @@ static void mark_setup_done(void)
 
 #ifdef _WIN32
 
-static bool show_kit_game_audio_dialog(void)
+static void show_kit_game_audio_notice(void)
 {
-	int result = MessageBoxW(NULL,
-				 L"Update für das Minewache OBS-Kit:\n\n"
-				 L"Der Spielton soll künftig direkt von der Spielaufnahme "
-				 L"kommen. Dann gibt es ohne Bild auch keinen Ingame-Ton mehr, "
-				 L"und der Fehler fällt sofort auf.\n\n"
-				 L"\"Minewache Sounds\" wird dafür ausgeblendet, deine "
-				 L"Lautstärke bleibt erhalten.\n\n"
-				 L"Jetzt umstellen?",
-				 L"OBS LTC Timecode - Kit-Update", MB_YESNO | MB_ICONQUESTION | MB_SYSTEMMODAL);
-	return result == IDYES;
+	MessageBoxW(NULL,
+		    L"Dein Minewache OBS-Kit wurde aktualisiert:\n\n"
+		    L"Der Spielton kommt jetzt direkt von der Spielaufnahme. Ohne Bild "
+		    L"gibt es damit auch keinen Ingame-Ton mehr, und der Fehler fällt "
+		    L"sofort auf.\n\n"
+		    L"\"Minewache Sounds\" wurde dafür ausgeblendet, deine Lautstärke "
+		    L"ist erhalten geblieben.",
+		    L"OBS LTC Timecode - Kit-Update",
+		    MB_OK | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL);
 }
 
 static bool hide_source_in_scene(void *param, obs_source_t *scene_source)
@@ -229,11 +231,9 @@ static void migrate_kit_game_audio(void *param)
 	} else if (!done) {
 		obs_source_t *sounds = obs_get_source_by_uuid(KIT_GAME_SOUNDS_UUID);
 		if (sounds) {
-			if (show_kit_game_audio_dialog())
-				apply_kit_game_audio(game, sounds);
-			else
-				obs_log(LOG_INFO, "kit update: declined by user");
+			apply_kit_game_audio(game, sounds);
 			obs_source_release(sounds);
+			show_kit_game_audio_notice();
 			done = true;
 		}
 	}

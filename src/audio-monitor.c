@@ -80,116 +80,306 @@ static uint64_t am_now_ms(void)
 	return (os_gettime_ns() - g_am.start_ns) / AM_NS_PER_MS;
 }
 
-/* ---- Warning dialog ----
+/* ---- Warning overlay ----
  *
- * MessageBoxW blocks, so it gets its own module-lifetime thread: neither the
- * monitor thread nor a frontend callback may ever wait on the operator
- * (TICKET-055/056 deadlock). */
+ * A big red panel on the monitor OBS is on, always on top. A MessageBox from
+ * a background thread opens behind the game and goes unnoticed (field test
+ * 2026-11-02). The panel never takes the focus, so the game stays active.
+ *
+ * Runs on its own module-lifetime thread: neither the monitor thread nor a
+ * frontend callback may ever wait on the operator (TICKET-055/056 deadlock). */
 
 #ifdef _WIN32
 
-#define AM_DIALOG_TITLE L"MW Aufnahme – Ton-Warnung"
-#define AM_DIALOG_QUEUE 8
-#define AM_DIALOG_TEXT_LEN 512
+#define AM_OVERLAY_CLASS L"MwAudioWarningOverlay"
+#define AM_OVERLAY_QUEUE 8
+#define AM_OVERLAY_TIMER_ID 1
+#define AM_OVERLAY_TIMER_MS 500
+#define AM_OVERLAY_OK_ID 1
+#define AM_OVERLAY_BASE_WIDTH 900
+#define AM_OVERLAY_BASE_HEIGHT 420
+#define AM_OVERLAY_BORDER 8
+#define AM_COLOR_RED RGB(255, 40, 40)
+#define AM_COLOR_WHITE RGB(255, 255, 255)
+#define AM_COLOR_GREEN RGB(90, 220, 110)
+
+struct am_warning {
+	wchar_t title[64];
+	wchar_t subject[256];
+	wchar_t reason[128];
+	char source[128];
+	int limit_sec;
+	uint64_t warned_ns;
+	int frozen_sec; /* -1 while the outage is running */
+	bool recovered;
+};
 
 static struct {
-	wchar_t queue[AM_DIALOG_QUEUE][AM_DIALOG_TEXT_LEN];
+	struct am_warning queue[AM_OVERLAY_QUEUE];
 	size_t head;
 	size_t count;
+	struct am_warning current;
 	pthread_mutex_t mutex;
 	os_event_t *wake_event;
 	pthread_t thread;
 	bool thread_created;
 	volatile bool stopping;
 	volatile bool exited;
-} g_dialog;
+	volatile HWND hwnd;
+	HWND anchor;
+	HMODULE module;
+	HFONT button_font;
+	double scale;
+} g_overlay;
 
-static void *dialog_thread_func(void *data)
+static int warning_seconds(const struct am_warning *warning)
+{
+	if (warning->frozen_sec >= 0)
+		return warning->frozen_sec;
+	return warning->limit_sec + (int)((os_gettime_ns() - warning->warned_ns) / 1000000000ULL);
+}
+
+static HFONT create_overlay_font(int base_height, int weight)
+{
+	return CreateFontW(-(int)(base_height * g_overlay.scale), 0, 0, 0, weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+			   OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+}
+
+static void draw_overlay_text(HDC dc, const RECT *area, LONG *top, const wchar_t *text, int base_height, int weight,
+			      COLORREF color)
+{
+	HFONT font = create_overlay_font(base_height, weight);
+	HFONT old_font = SelectObject(dc, font);
+	RECT line = {area->left, *top, area->right, area->bottom};
+
+	SetTextColor(dc, color);
+	DrawTextW(dc, text, -1, &line, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX | DT_CALCRECT);
+	line.left = area->left;
+	line.right = area->right;
+	DrawTextW(dc, text, -1, &line, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
+	*top = line.bottom + (LONG)(10 * g_overlay.scale);
+
+	SelectObject(dc, old_font);
+	DeleteObject(font);
+}
+
+static void paint_overlay(HWND hwnd)
+{
+	struct am_warning warning;
+	PAINTSTRUCT ps;
+	RECT client;
+	wchar_t status[128];
+
+	pthread_mutex_lock(&g_overlay.mutex);
+	warning = g_overlay.current;
+	pthread_mutex_unlock(&g_overlay.mutex);
+
+	int seconds = warning_seconds(&warning);
+	if (warning.recovered)
+		swprintf(status, 128, L"%d:%02d Min. kein Ton erkannt, jetzt wieder da", seconds / 60, seconds % 60);
+	else
+		swprintf(status, 128, L"Seit %d:%02d Min. kein Ton erkannt", seconds / 60, seconds % 60);
+
+	HDC window_dc = BeginPaint(hwnd, &ps);
+	GetClientRect(hwnd, &client);
+
+	/* Drawn off-screen: the panel repaints twice a second for the clock */
+	HDC dc = CreateCompatibleDC(window_dc);
+	HBITMAP bitmap = CreateCompatibleBitmap(window_dc, client.right, client.bottom);
+	HBITMAP old_bitmap = SelectObject(dc, bitmap);
+	HBRUSH red = CreateSolidBrush(AM_COLOR_RED);
+	HBRUSH black = CreateSolidBrush(RGB(0, 0, 0));
+	int border = (int)(AM_OVERLAY_BORDER * g_overlay.scale);
+	RECT inner = {border, border, client.right - border, client.bottom - border};
+
+	FillRect(dc, &client, red);
+	FillRect(dc, &inner, black);
+	SetBkMode(dc, TRANSPARENT);
+
+	RECT area = {inner.left + border, inner.top + border, inner.right - border, inner.bottom};
+	LONG top = area.top;
+	draw_overlay_text(dc, &area, &top, warning.title, 46, FW_BLACK, AM_COLOR_RED);
+	draw_overlay_text(dc, &area, &top, warning.subject, 30, FW_BOLD, AM_COLOR_WHITE);
+	if (warning.reason[0])
+		draw_overlay_text(dc, &area, &top, warning.reason, 26, FW_BOLD, AM_COLOR_WHITE);
+	draw_overlay_text(dc, &area, &top, status, 34, FW_BOLD, warning.recovered ? AM_COLOR_GREEN : AM_COLOR_RED);
+	draw_overlay_text(dc, &area, &top,
+			  L"Melde dich jetzt kurz beim Dreh, damit das gefixt wird.\n"
+			  L"Ist das eine Fehlanzeige und der Ton ist in Ordnung? Sag beim Dreh trotzdem Bescheid.",
+			  22, FW_NORMAL, AM_COLOR_WHITE);
+
+	BitBlt(window_dc, 0, 0, client.right, client.bottom, dc, 0, 0, SRCCOPY);
+
+	DeleteObject(red);
+	DeleteObject(black);
+	SelectObject(dc, old_bitmap);
+	DeleteObject(bitmap);
+	DeleteDC(dc);
+	EndPaint(hwnd, &ps);
+}
+
+static LRESULT CALLBACK overlay_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
+{
+	switch (msg) {
+	case WM_MOUSEACTIVATE:
+		return MA_NOACTIVATE;
+	case WM_ERASEBKGND:
+		return 1;
+	case WM_PAINT:
+		paint_overlay(hwnd);
+		return 0;
+	case WM_TIMER:
+		/* Other topmost windows may have moved above the panel */
+		SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+		InvalidateRect(hwnd, NULL, FALSE);
+		return 0;
+	case WM_COMMAND:
+		if (LOWORD(wparam) == AM_OVERLAY_OK_ID)
+			DestroyWindow(hwnd);
+		return 0;
+	case WM_CLOSE:
+		DestroyWindow(hwnd);
+		return 0;
+	case WM_DESTROY:
+		KillTimer(hwnd, AM_OVERLAY_TIMER_ID);
+		g_overlay.hwnd = NULL;
+		PostQuitMessage(0);
+		return 0;
+	default:
+		return DefWindowProcW(hwnd, msg, wparam, lparam);
+	}
+}
+
+static void show_overlay_window(void)
+{
+	MONITORINFO info = {.cbSize = sizeof(info)};
+	HMONITOR monitor = MonitorFromWindow(g_overlay.anchor, MONITOR_DEFAULTTOPRIMARY);
+	if (!GetMonitorInfoW(monitor, &info))
+		return;
+
+	int monitor_width = info.rcMonitor.right - info.rcMonitor.left;
+	int monitor_height = info.rcMonitor.bottom - info.rcMonitor.top;
+	g_overlay.scale = (double)monitor_width * 0.6 / AM_OVERLAY_BASE_WIDTH;
+
+	int width = (int)(AM_OVERLAY_BASE_WIDTH * g_overlay.scale);
+	int height = (int)(AM_OVERLAY_BASE_HEIGHT * g_overlay.scale);
+	int x = info.rcMonitor.left + (monitor_width - width) / 2;
+	int y = info.rcMonitor.top + (monitor_height - height) / 4;
+
+	HWND hwnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, AM_OVERLAY_CLASS,
+				    L"MW Aufnahme - Ton-Warnung", WS_POPUP, x, y, width, height, NULL, NULL,
+				    g_overlay.module, NULL);
+	if (!hwnd) {
+		obs_log(LOG_ERROR, "audio monitor: overlay window creation failed (%lu)", GetLastError());
+		return;
+	}
+
+	int button_width = (int)(180 * g_overlay.scale);
+	int button_height = (int)(46 * g_overlay.scale);
+	HWND button = CreateWindowExW(WS_EX_NOACTIVATE, L"BUTTON", L"OK", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+				      (width - button_width) / 2, height - button_height - (int)(24 * g_overlay.scale),
+				      button_width, button_height, hwnd, (HMENU)(INT_PTR)AM_OVERLAY_OK_ID,
+				      g_overlay.module, NULL);
+	g_overlay.button_font = create_overlay_font(24, FW_BOLD);
+	SendMessageW(button, WM_SETFONT, (WPARAM)g_overlay.button_font, TRUE);
+
+	g_overlay.hwnd = hwnd;
+	SetTimer(hwnd, AM_OVERLAY_TIMER_ID, AM_OVERLAY_TIMER_MS, NULL);
+	ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+	MessageBeep(MB_ICONWARNING);
+
+	MSG msg;
+	while (GetMessageW(&msg, NULL, 0, 0) > 0) {
+		TranslateMessage(&msg);
+		DispatchMessageW(&msg);
+	}
+
+	DeleteObject(g_overlay.button_font);
+	g_overlay.button_font = NULL;
+}
+
+static void *overlay_thread_func(void *data)
 {
 	(void)data;
 	os_set_thread_name("mw-audio-warning");
 
-	while (os_event_wait(g_dialog.wake_event) == 0 && !os_atomic_load_bool(&g_dialog.stopping)) {
+	WNDCLASSW wc = {0};
+	wc.lpfnWndProc = overlay_proc;
+	wc.hInstance = g_overlay.module;
+	wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
+	wc.lpszClassName = AM_OVERLAY_CLASS;
+	RegisterClassW(&wc);
+
+	while (os_event_wait(g_overlay.wake_event) == 0 && !os_atomic_load_bool(&g_overlay.stopping)) {
 		for (;;) {
-			wchar_t text[AM_DIALOG_TEXT_LEN];
-
-			pthread_mutex_lock(&g_dialog.mutex);
-			bool have_text = g_dialog.count > 0;
-			if (have_text) {
-				wcscpy_s(text, AM_DIALOG_TEXT_LEN, g_dialog.queue[g_dialog.head]);
-				g_dialog.head = (g_dialog.head + 1) % AM_DIALOG_QUEUE;
-				g_dialog.count--;
+			pthread_mutex_lock(&g_overlay.mutex);
+			bool have_warning = g_overlay.count > 0;
+			if (have_warning) {
+				g_overlay.current = g_overlay.queue[g_overlay.head];
+				g_overlay.head = (g_overlay.head + 1) % AM_OVERLAY_QUEUE;
+				g_overlay.count--;
 			}
-			pthread_mutex_unlock(&g_dialog.mutex);
+			pthread_mutex_unlock(&g_overlay.mutex);
 
-			if (!have_text || os_atomic_load_bool(&g_dialog.stopping))
+			if (!have_warning || os_atomic_load_bool(&g_overlay.stopping))
 				break;
 
-			MessageBoxW(NULL, text, AM_DIALOG_TITLE,
-				    MB_OK | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND);
+			show_overlay_window();
 		}
 	}
 
-	os_atomic_set_bool(&g_dialog.exited, true);
+	UnregisterClassW(AM_OVERLAY_CLASS, g_overlay.module);
+	os_atomic_set_bool(&g_overlay.exited, true);
 	return NULL;
 }
 
-static void dialog_start(void)
+static void overlay_start(void)
 {
-	pthread_mutex_init(&g_dialog.mutex, NULL);
+	pthread_mutex_init(&g_overlay.mutex, NULL);
+	GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+			   (LPCWSTR)overlay_proc, &g_overlay.module);
 
-	if (os_event_init(&g_dialog.wake_event, OS_EVENT_TYPE_AUTO) != 0) {
+	if (os_event_init(&g_overlay.wake_event, OS_EVENT_TYPE_AUTO) != 0) {
 		obs_log(LOG_ERROR, "audio monitor: wake event creation failed, warnings go to the log only");
 		return;
 	}
 
-	if (pthread_create(&g_dialog.thread, NULL, dialog_thread_func, NULL) == 0) {
-		g_dialog.thread_created = true;
+	if (pthread_create(&g_overlay.thread, NULL, overlay_thread_func, NULL) == 0) {
+		g_overlay.thread_created = true;
 	} else {
-		os_event_destroy(g_dialog.wake_event);
-		g_dialog.wake_event = NULL;
-		obs_log(LOG_ERROR, "audio monitor: dialog thread creation failed, warnings go to the log only");
+		os_event_destroy(g_overlay.wake_event);
+		g_overlay.wake_event = NULL;
+		obs_log(LOG_ERROR, "audio monitor: overlay thread creation failed, warnings go to the log only");
 	}
 }
 
-static void dialog_stop(void)
+static void overlay_stop(void)
 {
-	if (g_dialog.thread_created) {
-		os_atomic_set_bool(&g_dialog.stopping, true);
-		os_event_signal(g_dialog.wake_event);
+	if (g_overlay.thread_created) {
+		os_atomic_set_bool(&g_overlay.stopping, true);
+		os_event_signal(g_overlay.wake_event);
 
 		/* A warning may still be open: unloading the module under a
-		 * running MessageBoxW would crash, so close it first. */
-		while (!os_atomic_load_bool(&g_dialog.exited)) {
-			HWND box = FindWindowW(L"#32770", AM_DIALOG_TITLE);
-			if (box)
-				PostMessageW(box, WM_CLOSE, 0, 0);
+		 * live window would crash, so close it first. */
+		while (!os_atomic_load_bool(&g_overlay.exited)) {
+			HWND hwnd = g_overlay.hwnd;
+			if (hwnd)
+				PostMessageW(hwnd, WM_CLOSE, 0, 0);
 			os_sleep_ms(20);
 		}
 
-		pthread_join(g_dialog.thread, NULL);
-		os_event_destroy(g_dialog.wake_event);
-		g_dialog.wake_event = NULL;
-		g_dialog.thread_created = false;
+		pthread_join(g_overlay.thread, NULL);
+		os_event_destroy(g_overlay.wake_event);
+		g_overlay.wake_event = NULL;
+		g_overlay.thread_created = false;
 	}
 
-	pthread_mutex_destroy(&g_dialog.mutex);
+	pthread_mutex_destroy(&g_overlay.mutex);
 }
 
-static void dialog_push(const wchar_t *text)
+static void overlay_set_anchor(void *main_window)
 {
-	if (!g_dialog.thread_created)
-		return;
-
-	pthread_mutex_lock(&g_dialog.mutex);
-	if (g_dialog.count < AM_DIALOG_QUEUE) {
-		size_t tail = (g_dialog.head + g_dialog.count) % AM_DIALOG_QUEUE;
-		wcscpy_s(g_dialog.queue[tail], AM_DIALOG_TEXT_LEN, text);
-		g_dialog.count++;
-	}
-	pthread_mutex_unlock(&g_dialog.mutex);
-
-	os_event_signal(g_dialog.wake_event);
+	g_overlay.anchor = main_window;
 }
 
 static const wchar_t *ltc_fault_text(enum ltc_fault fault)
@@ -208,42 +398,78 @@ static const wchar_t *ltc_fault_text(enum ltc_fault fault)
 	}
 }
 
-static void show_warning(const struct am_entry *entry, enum ltc_fault fault)
+static void overlay_show(const struct am_entry *entry, enum ltc_fault fault)
 {
+	struct am_warning warning = {0};
 	wchar_t name[128] = L"";
 	wchar_t track[96] = L"";
-	wchar_t text[AM_DIALOG_TEXT_LEN];
 
 	os_utf8_to_wcs(entry->name, 0, name, sizeof(name) / sizeof(name[0]));
 	os_utf8_to_wcs(entry->track, 0, track, sizeof(track) / sizeof(track[0]));
 
-	if (entry->is_ltc) {
-		swprintf(text, AM_DIALOG_TEXT_LEN,
-			 L"Der LTC-Timecode kommt nicht in der Aufnahme an!\n\n"
-			 L"Quelle: %ls\n"
-			 L"%ls\n\n"
-			 L"Ohne LTC ist diese Aufnahme nicht synchron. Bitte sofort prüfen.",
-			 name, ltc_fault_text(fault));
-	} else {
-		swprintf(text, AM_DIALOG_TEXT_LEN,
-			 L"Seit 60 Sekunden kommt kein Ton an:\n\n"
-			 L"%ls (%ls)\n\n"
-			 L"Bitte prüfen. Wenn das Absicht ist, die Quelle in OBS "
-			 L"stumm schalten, dann kommt keine Warnung.",
-			 name, track);
-	}
+	wcscpy_s(warning.title, 64, entry->is_ltc ? L"KEIN TIMECODE IN DER AUFNAHME!" : L"KEIN TON IN DER AUFNAHME!");
+	swprintf(warning.subject, 256, L"%ls (%ls)", name, track);
+	if (entry->is_ltc)
+		wcscpy_s(warning.reason, 128, ltc_fault_text(fault));
 
-	dialog_push(text);
+	snprintf(warning.source, sizeof(warning.source), "%s", entry->name);
+	warning.limit_sec = (int)((entry->is_ltc ? AM_LIMIT_LTC_MS : AM_LIMIT_SOURCE_MS) / 1000);
+	warning.warned_ns = os_gettime_ns();
+	warning.frozen_sec = -1;
+
+	if (!g_overlay.thread_created)
+		return;
+
+	pthread_mutex_lock(&g_overlay.mutex);
+	if (g_overlay.count < AM_OVERLAY_QUEUE) {
+		g_overlay.queue[(g_overlay.head + g_overlay.count) % AM_OVERLAY_QUEUE] = warning;
+		g_overlay.count++;
+	}
+	pthread_mutex_unlock(&g_overlay.mutex);
+
+	os_event_signal(g_overlay.wake_event);
+}
+
+static void freeze_warning(struct am_warning *warning, const char *source, bool recovered)
+{
+	if (warning->frozen_sec >= 0 || (source && strcmp(warning->source, source) != 0))
+		return;
+	warning->frozen_sec = warning_seconds(warning);
+	warning->recovered = recovered;
+}
+
+/* Stops the clock: when the sound came back, or for all open warnings when
+ * the recording ended. NULL source means all. */
+static void overlay_freeze(const char *source, bool recovered)
+{
+	if (!g_overlay.thread_created)
+		return;
+
+	pthread_mutex_lock(&g_overlay.mutex);
+	if (g_overlay.current.title[0])
+		freeze_warning(&g_overlay.current, source, recovered);
+	for (size_t i = 0; i < g_overlay.count; i++)
+		freeze_warning(&g_overlay.queue[(g_overlay.head + i) % AM_OVERLAY_QUEUE], source, recovered);
+	pthread_mutex_unlock(&g_overlay.mutex);
 }
 
 #else
 
-static void dialog_start(void) {}
-static void dialog_stop(void) {}
-static void show_warning(const struct am_entry *entry, enum ltc_fault fault)
+static void overlay_start(void) {}
+static void overlay_stop(void) {}
+static void overlay_set_anchor(void *main_window)
+{
+	(void)main_window;
+}
+static void overlay_show(const struct am_entry *entry, enum ltc_fault fault)
 {
 	(void)entry;
 	(void)fault;
+}
+static void overlay_freeze(const char *source, bool recovered)
+{
+	(void)source;
+	(void)recovered;
 }
 
 #endif /* _WIN32 */
@@ -307,9 +533,10 @@ static void check_entry(struct am_entry *entry, bool any_ltc_active)
 	if (event == AM_EVENT_WARN) {
 		obs_log(LOG_WARNING, "audio monitor: no sound on '%s' (%s), ltc fault %d", entry->name, entry->track,
 			(int)fault);
-		show_warning(entry, fault);
+		overlay_show(entry, fault);
 	} else if (event == AM_EVENT_RECOVERED) {
 		obs_log(LOG_INFO, "audio monitor: sound is back on '%s'", entry->name);
+		overlay_freeze(entry->name, true);
 	}
 }
 
@@ -437,6 +664,8 @@ static void monitor_start(void)
 	config_t *profile = obs_frontend_get_profile_config();
 	bool advanced = false;
 
+	overlay_set_anchor(obs_frontend_get_main_window_handle());
+
 	read_recorded_tracks(profile, &advanced);
 	obs_enum_sources(collect_source, NULL);
 
@@ -483,6 +712,7 @@ static void monitor_stop(void)
 
 	os_event_signal(g_am.stop_event);
 	pthread_join(g_am.thread, NULL);
+	overlay_freeze(NULL, false);
 
 	for (size_t i = 0; i < g_am.count; i++)
 		obs_source_remove_audio_capture_callback(g_am.entries[i].source, on_source_audio, &g_am.entries[i]);
@@ -509,7 +739,7 @@ static void on_frontend_event(enum obs_frontend_event event, void *data)
 
 void audio_monitor_init(void)
 {
-	dialog_start();
+	overlay_start();
 	obs_frontend_add_event_callback(on_frontend_event, NULL);
 }
 
@@ -517,7 +747,7 @@ void audio_monitor_cleanup(void)
 {
 	obs_frontend_remove_event_callback(on_frontend_event, NULL);
 	monitor_stop();
-	dialog_stop();
+	overlay_stop();
 }
 
 #endif /* ENABLE_FRONTEND_API */
