@@ -43,6 +43,13 @@
 #define LEGACY_SCENE_COLLECTION_NAME "Minewache"
 #define LEGACY_PROFILE_NAME "Minewache"
 
+/* TICKET-082: fixed UUIDs of the shipped kit. Identifying by UUID instead of
+ * by name keeps the migration off any self-built collection. */
+#define CONFIG_KEY_KIT_GAME_AUDIO_DONE "kit_game_audio_done"
+#define KIT_GAME_CAPTURE_UUID "b4d23cea-069d-412e-bf6c-84c495ae6c10"
+#define KIT_GAME_SOUNDS_UUID "3506fe35-9121-4192-a84b-feba658d54e7"
+#define KIT_LTC_TRACK_MIXER (1u << 2)
+
 static bool has_scene_collection(const char *name)
 {
 	char **collections = obs_frontend_get_scene_collections();
@@ -140,13 +147,101 @@ static void mark_setup_done(void)
 	config_save(config);
 }
 
-static void on_frontend_event(enum obs_frontend_event event, void *data)
-{
-	(void)data;
+#ifdef _WIN32
 
-	if (event != OBS_FRONTEND_EVENT_FINISHED_LOADING)
+static bool show_kit_game_audio_dialog(void)
+{
+	int result = MessageBoxW(NULL,
+				 L"Update für das Minewache OBS-Kit:\n\n"
+				 L"Der Spielton soll künftig direkt von der Spielaufnahme "
+				 L"kommen. Dann gibt es ohne Bild auch keinen Ingame-Ton mehr, "
+				 L"und der Fehler fällt sofort auf.\n\n"
+				 L"\"Minewache Sounds\" wird dafür ausgeblendet, deine "
+				 L"Lautstärke bleibt erhalten.\n\n"
+				 L"Jetzt umstellen?",
+				 L"OBS LTC Timecode - Kit-Update", MB_YESNO | MB_ICONQUESTION | MB_SYSTEMMODAL);
+	return result == IDYES;
+}
+
+static bool hide_source_in_scene(void *param, obs_source_t *scene_source)
+{
+	obs_scene_t *scene = obs_scene_from_source(scene_source);
+	obs_sceneitem_t *item = scene ? obs_scene_find_source(scene, param) : NULL;
+
+	if (item)
+		obs_sceneitem_set_visible(item, false);
+	return true;
+}
+
+static void apply_kit_game_audio(obs_source_t *game, obs_source_t *sounds)
+{
+	/* Mixers first: the kit's game capture also sits on the LTC track, and
+	 * game sound must never reach it. */
+	obs_source_set_audio_mixers(game, obs_source_get_audio_mixers(sounds) & ~KIT_LTC_TRACK_MIXER);
+	obs_source_set_volume(game, obs_source_get_volume(sounds));
+	obs_source_set_muted(game, obs_source_muted(sounds));
+	obs_source_set_sync_offset(game, obs_source_get_sync_offset(sounds));
+
+	obs_data_t *settings = obs_data_create();
+	obs_data_set_bool(settings, "capture_audio", true);
+	obs_source_update(game, settings);
+	obs_data_release(settings);
+
+	/* Hidden, not removed: showing it again is the way back. */
+	obs_enum_scenes(hide_source_in_scene, (void *)obs_source_get_name(sounds));
+
+	obs_frontend_save();
+	obs_log(LOG_INFO, "kit update: game audio now comes from the game capture");
+}
+
+static void migrate_kit_game_audio(void)
+{
+	if (!is_current_scene_collection(SCENE_COLLECTION_NAME) || obs_frontend_recording_active())
 		return;
 
+	obs_source_t *game = obs_get_source_by_uuid(KIT_GAME_CAPTURE_UUID);
+	if (!game)
+		return;
+
+	obs_data_t *settings = obs_source_get_settings(game);
+	bool capture_audio = obs_data_get_bool(settings, "capture_audio");
+	obs_data_release(settings);
+
+	config_t *config = obs_frontend_get_user_config();
+	bool done = config && config_get_bool(config, CONFIG_SECTION, CONFIG_KEY_KIT_GAME_AUDIO_DONE);
+
+	if (capture_audio) {
+		/* Enabled by hand: runs on every start, protects the LTC track. */
+		uint32_t mixers = obs_source_get_audio_mixers(game);
+		if (mixers & KIT_LTC_TRACK_MIXER) {
+			obs_source_set_audio_mixers(game, mixers & ~KIT_LTC_TRACK_MIXER);
+			obs_frontend_save();
+			obs_log(LOG_WARNING, "kit update: removed game audio from the LTC track");
+		}
+		done = true;
+	} else if (!done) {
+		obs_source_t *sounds = obs_get_source_by_uuid(KIT_GAME_SOUNDS_UUID);
+		if (sounds) {
+			if (show_kit_game_audio_dialog())
+				apply_kit_game_audio(game, sounds);
+			else
+				obs_log(LOG_INFO, "kit update: declined by user");
+			obs_source_release(sounds);
+			done = true;
+		}
+	}
+
+	if (done && config) {
+		config_set_bool(config, CONFIG_SECTION, CONFIG_KEY_KIT_GAME_AUDIO_DONE, true);
+		config_save(config);
+	}
+	obs_source_release(game);
+}
+
+#endif /* _WIN32 */
+
+static void run_auto_setup(void)
+{
 	/* Check if auto-setup was already performed */
 	config_t *config = obs_frontend_get_user_config();
 	if (config && config_get_bool(config, CONFIG_SECTION, CONFIG_KEY_SETUP_DONE)) {
@@ -206,6 +301,19 @@ static void on_frontend_event(enum obs_frontend_event event, void *data)
 	}
 
 	mark_setup_done();
+}
+
+static void on_frontend_event(enum obs_frontend_event event, void *data)
+{
+	(void)data;
+
+	if (event != OBS_FRONTEND_EVENT_FINISHED_LOADING)
+		return;
+
+	run_auto_setup();
+#ifdef _WIN32
+	migrate_kit_game_audio();
+#endif
 }
 
 void auto_setup_init(void)

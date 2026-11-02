@@ -318,12 +318,13 @@
             "versioned_id": "game_capture",
             "settings": {
                 "window": "Minewache Modpack 30.4:LWJGL:javaw.exe",
-                "capture_mode": "window"
+                "capture_mode": "window",
+                "capture_audio": true
             },
-            "mixers": 255,
+            "mixers": 194,
             "sync": 0,
             "flags": 0,
-            "volume": 1.0,
+            "volume": 0.099152609705924988,
             "balance": 0.5,
             "enabled": true,
             "muted": false,
@@ -412,7 +413,7 @@
                     {
                         "name": "Minewache Sounds",
                         "source_uuid": "3506fe35-9121-4192-a84b-feba658d54e7",
-                        "visible": true,
+                        "visible": false,
                         "locked": false,
                         "rot": 0.0,
                         "scale_ref": {

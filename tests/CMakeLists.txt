@@ -54,3 +54,8 @@ add_test(NAME HTTPTimeTests COMMAND test-http-time)
 add_executable(test-mw-helpers test-mw-helpers.cpp "${CMAKE_SOURCE_DIR}/src/mw-recording-helpers.c")
 target_link_libraries(test-mw-helpers PRIVATE GTest::gtest_main)
 add_test(NAME MWHelpersTests COMMAND test-mw-helpers)
+
+# --- test-audio-monitor (TICKET-081) ---
+add_executable(test-audio-monitor test-audio-monitor.cpp "${CMAKE_SOURCE_DIR}/src/audio-monitor-core.c")
+target_link_libraries(test-audio-monitor PRIVATE GTest::gtest_main)
+add_test(NAME AudioMonitorTests COMMAND test-audio-monitor)

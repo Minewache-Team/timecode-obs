@@ -71,6 +71,10 @@ target_sources(
     src/mw-recording.h
     src/mw-recording-helpers.c
     src/mw-recording-helpers.h
+    src/audio-monitor.c
+    src/audio-monitor.h
+    src/audio-monitor-core.c
+    src/audio-monitor-core.h
 )
 
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")

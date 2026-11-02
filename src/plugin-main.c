@@ -23,6 +23,7 @@
 #include "ntp-client.h"
 #include "http-time-client.h"
 #ifdef ENABLE_FRONTEND_API
+#include "audio-monitor.h"
 #include "auto-setup.h"
 #include "mw-recording.h"
 #endif
@@ -52,6 +53,7 @@ bool obs_module_load(void)
 #ifdef ENABLE_FRONTEND_API
 	auto_setup_init();
 	mw_recording_init();
+	audio_monitor_init();
 #endif
 
 	obs_log(LOG_INFO,
@@ -64,6 +66,7 @@ bool obs_module_load(void)
 void obs_module_unload(void)
 {
 #ifdef ENABLE_FRONTEND_API
+	audio_monitor_cleanup();
 	mw_recording_cleanup();
 	auto_setup_cleanup();
 #endif
