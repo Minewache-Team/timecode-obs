@@ -194,14 +194,21 @@ static void apply_kit_game_audio(obs_source_t *game, obs_source_t *sounds)
 	obs_log(LOG_INFO, "kit update: game audio now comes from the game capture");
 }
 
-static void migrate_kit_game_audio(void)
+static void migrate_kit_game_audio(void *param)
 {
-	if (!is_current_scene_collection(SCENE_COLLECTION_NAME) || obs_frontend_recording_active())
+	static bool running = false;
+	(void)param;
+
+	/* The dialog pumps messages, a second queued task could run inside it */
+	if (running || !is_current_scene_collection(SCENE_COLLECTION_NAME) || obs_frontend_recording_active())
 		return;
+	running = true;
 
 	obs_source_t *game = obs_get_source_by_uuid(KIT_GAME_CAPTURE_UUID);
-	if (!game)
+	if (!game) {
+		running = false;
 		return;
+	}
 
 	obs_data_t *settings = obs_source_get_settings(game);
 	bool capture_audio = obs_data_get_bool(settings, "capture_audio");
@@ -236,6 +243,7 @@ static void migrate_kit_game_audio(void)
 		config_save(config);
 	}
 	obs_source_release(game);
+	running = false;
 }
 
 #endif /* _WIN32 */
@@ -307,12 +315,15 @@ static void on_frontend_event(enum obs_frontend_event event, void *data)
 {
 	(void)data;
 
-	if (event != OBS_FRONTEND_EVENT_FINISHED_LOADING)
-		return;
+	if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING)
+		run_auto_setup();
 
-	run_auto_setup();
+	/* OBS may start in another collection and switch later, so the startup
+	 * check alone misses the kit. Queued: not from inside the frontend
+	 * callback that is still activating the collection. */
 #ifdef _WIN32
-	migrate_kit_game_audio();
+	if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING || event == OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGED)
+		obs_queue_task(OBS_TASK_UI, migrate_kit_game_audio, NULL, false);
 #endif
 }
 

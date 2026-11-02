@@ -75,6 +75,7 @@
  *                       (TC-Restabweichung), initial_skew_ms
  *                       (PC-Uhr-Fehler beim Start) — TICKET-075 */
 #define MW_CURRENT_CONSENT_VERSION 3
+#define MW_OFFICIAL_SETUP_NAME "Minewache-New"
 
 /* ---- Global state ---- */
 
@@ -89,6 +90,7 @@ static struct {
 	int consent_version; /* TICKET-048: which consent text the user accepted */
 
 	bool recording_active;
+	bool official_setup; /* TICKET-083: official collection and profile are active */
 
 	pthread_t heartbeat_thread;
 	os_event_t *stop_event;
@@ -341,7 +343,7 @@ static void *heartbeat_thread_func(void *data)
 		char server[512];
 		char name[100];
 		char key[256];
-		bool enabled, consent, active;
+		bool enabled, consent, active, official;
 
 		pthread_mutex_lock(&g_mw.mutex);
 		snprintf(server, sizeof(server), "%s", g_mw.server_url);
@@ -350,9 +352,10 @@ static void *heartbeat_thread_func(void *data)
 		enabled = g_mw.enabled;
 		consent = g_mw.consent_given;
 		active = g_mw.recording_active;
+		official = g_mw.official_setup;
 		pthread_mutex_unlock(&g_mw.mutex);
 
-		if (enabled && consent && server[0] && name[0]) {
+		if (enabled && consent && official && server[0] && name[0]) {
 			ltc_diag_t diag;
 			bool have_offset = ltc_source_get_diag(&diag);
 
@@ -1096,11 +1099,41 @@ static bool ensure_consent(void)
 #endif
 }
 
+/* ---- Official setup gate (TICKET-083) ----
+ *
+ * Status only goes to the website from the official MW collection AND
+ * profile. Read here on the UI thread and cached: the heartbeat thread must
+ * not call into the frontend. The LTC source is not affected. */
+
+static void update_official_setup(void)
+{
+	char *collection = obs_frontend_get_current_scene_collection();
+	char *profile = obs_frontend_get_current_profile();
+	bool official = collection && profile && strcmp(collection, MW_OFFICIAL_SETUP_NAME) == 0 &&
+			strcmp(profile, MW_OFFICIAL_SETUP_NAME) == 0;
+
+	pthread_mutex_lock(&g_mw.mutex);
+	bool changed = g_mw.official_setup != official;
+	g_mw.official_setup = official;
+	pthread_mutex_unlock(&g_mw.mutex);
+
+	if (changed)
+		obs_log(LOG_INFO, "MW recording: status reporting %s (collection '%s', profile '%s')",
+			official ? "on" : "off", collection ? collection : "", profile ? profile : "");
+
+	bfree(collection);
+	bfree(profile);
+}
+
 /* ---- Frontend event callback ---- */
 
 static void on_frontend_event(enum obs_frontend_event event, void *data)
 {
 	(void)data;
+
+	if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING || event == OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGED ||
+	    event == OBS_FRONTEND_EVENT_PROFILE_CHANGED)
+		update_official_setup();
 
 	/* TICKET-063: as soon as recording stops, ask each LTC source to
 	 * apply the current NTP target offset instantly on the next idle
@@ -1118,6 +1151,9 @@ static void on_frontend_event(enum obs_frontend_event event, void *data)
 		return;
 
 	if (event == OBS_FRONTEND_EVENT_RECORDING_STARTING) {
+		if (!g_mw.official_setup)
+			return;
+
 		if (!ensure_consent()) {
 			obs_log(LOG_INFO, "MW recording: skipping (no consent)");
 			return;
@@ -1125,7 +1161,7 @@ static void on_frontend_event(enum obs_frontend_event event, void *data)
 	}
 
 	if (event == OBS_FRONTEND_EVENT_RECORDING_STARTED) {
-		if (!g_mw.consent_given)
+		if (!g_mw.consent_given || !g_mw.official_setup)
 			return;
 
 		pthread_mutex_lock(&g_mw.mutex);
