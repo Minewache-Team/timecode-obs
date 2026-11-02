@@ -367,7 +367,7 @@ static void build_track_label(struct am_entry *entry, config_t *profile, bool ad
 		track++;
 
 	if (profile && advanced) {
-		char key[16];
+		char key[32];
 		snprintf(key, sizeof(key), "Track%dName", track);
 		track_name = config_get_string(profile, "AdvOut", key);
 	}
