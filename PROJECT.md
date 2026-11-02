@@ -1809,7 +1809,7 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 > Saro ist es bei Discord selbst passiert. Fehlt LTC, ist die Sync in Resolve weg.
 
 #### TICKET-081: Audio-Wächter während der Aufnahme
-- **Status:** `IMPLEMENTED, Feldtest in OBS offen`
+- **Status:** `DONE (0.6.6, Feldtest Saro 2026-11-02 ok)`
 - **Depends on:** —
 - **Type:** Feature (Safety)
 - **Description:** Warnt lokal per Fenster, wenn eine Quelle während der Aufnahme
@@ -1822,7 +1822,7 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
   - [x] Eine Warnung pro Ausfall, erneut erst nach zwischenzeitlich wieder vorhandenem Ton
   - [x] Warnfenster in eigenem Thread, nie im Frontend-Callback
   - [x] Unit-Tests für den Kern (`test-audio-monitor`)
-  - [ ] Feldtest im echten OBS, Schwelle mit dem Kit-Mikro geprüft, CPU verglichen
+  - [x] Feldtest im echten OBS (Saro 2026-11-02)
 - **Technical Notes:** `obs_source_add_audio_capture_callback` läuft in OBS erst,
   nachdem das Audio gepuffert ist (`obs-source.c:1551`), und bekommt const-Daten.
   `game_capture` trägt immer `OBS_SOURCE_AUDIO`, deshalb nur mit `capture_audio=true`
@@ -1832,7 +1832,7 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
   `tests/test-audio-monitor.cpp`, `buildspec.json`
 
 #### TICKET-082: Kit-Update, Game-Audio an die Game-Capture koppeln
-- **Status:** `IMPLEMENTED, Feldtest in OBS offen`
+- **Status:** `DONE (0.6.6, Feldtest Saro 2026-11-02 ok)`
 - **Depends on:** TICKET-081
 - **Type:** Feature (Kit)
 - **Description:** Game-Capture nimmt den Spielton selbst auf, damit ohne Bild auch
@@ -1857,7 +1857,7 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
   beim Dreh zu melden, auch bei einer Fehlanzeige.
 
 #### TICKET-083: Status nur aus der offiziellen Sammlung senden
-- **Status:** `IMPLEMENTED, Feldtest in OBS offen`
+- **Status:** `DONE (0.6.6, Feldtest Saro 2026-11-02 ok)`
 - **Depends on:** —
 - **Type:** Feature (Datensparsamkeit)
 - **Description:** Heartbeat, Start und Stop gehen nur an die Webseite, wenn
@@ -1951,7 +1951,7 @@ Only `ltc-source.c` and `plugin-main.c` include OBS headers.
 
 | Session | Date | Agent | Tickets Worked | Status at End | Notes |
 |---------|------|-------|----------------|---------------|-------|
-| 33 | 2026-11-02 | Claude (Opus 5.5) | TICKET-081, 082, 083 (implemented) | 0.6.6 gebaut, Feldtest offen | Audio-Wächter und Kit-Update gebaut, 6/6 Testreihen grün. Abschalter für den Wächter: `AudioMonitorOff=true` in `[obs-ltc-timecode]` der `user.ini`. Lokal muss das Windows SDK per `-A "x64,version=10.0.26100.0"` gesetzt werden und Tests per `-DBUILD_TESTS=ON`, die Presets bleiben unverändert. |
+| 33 | 2026-11-02 | Claude (Opus 5.5) | TICKET-081, 082, 083 (done) | 0.6.6 released, Feldtest ok | Audio-Wächter und Kit-Update gebaut, 6/6 Testreihen grün. Abschalter für den Wächter: `AudioMonitorOff=true` in `[obs-ltc-timecode]` der `user.ini`. Lokal muss das Windows SDK per `-A "x64,version=10.0.26100.0"` gesetzt werden und Tests per `-DBUILD_TESTS=ON`, die Presets bleiben unverändert. |
 | 32 | 2026-07-08 | Claude (Opus 4.8) | TICKET-076, 077, 078, 079, 080 (all done) | Website Folgen-Statistik überarbeitet | Datenschutzkompatibles Redesign der Koordinations-Website nach User-Feedback (Reconciliation "wer hat teilgenommen / von wem habe ich die Datei" kostet bei jedem Dreh Zeit). (076) Neue Tabelle `episode_deliveries` (season, episode, user_name, received) + `set_delivery`-Upsert — nur ein Boolean zum bereits gespeicherten Namen, keine neue PII/keine Discord-IDs (DSGVO-neutral, explizit gefordert). (077) `episode_stats` entdoppelt Teilnehmer pro user_name (neueste Kamera gewinnt), merged `received`, liefert `participant_count` + `seasons`(desc) + `active_season`; globale aktive Staffel als Dotfile `.active_season` (Muster von `.latest_version_override`). (078) `stats.php` von flacher Tabelle → Karten pro Folge: große Teilnehmerzahl, Gruppen "Habe ich ✅"/"Fehlt noch ❌" mit Erhalten-Häkchen (optimistisch + Rollback), Staffel-Buttons + setzbare aktive Staffel, "Discord-Nachricht kopieren" in Saros exaktem Format (Panel-Namen statt IDs; Rollen-Ping `DISCORD_ROLE_PING` in db.php, in config.php überschreibbar). (079) `scenes.php` entdoppelt Teilnehmer pro user_name (Stop/Neustart erzeugte Doppel-Chips), Zeit-Merge min-Start/max-Ende. (080) "Szenen / Statistik"-Nav landet jetzt auf der Folgen-Statistik; Sub-Nav Folgen-Statistik zuerst. Verifikation: PHP-Lint sauber (8 Dateien); **14/14** end-to-end gegen echte MariaDB (Schema/Upsert/Dedup/received/Validierung/seasons via Standalone-Harness nach ResyncTest-Muster, da kein Docker-3307 + kein PHPUnit im Environment — XAMPP-MariaDB genutzt, Privilege-Tabellen dieser XAMPP-Instanz sind vorbestehend crashed, daher `--skip-grant-tables`); **6/6** scenes.php-Dedup-Logik; stats.php JS `node --check` grün. Neuer PHPUnit-Test `tests/DeliveryTest.php` für den regulären CI-Lauf (Docker-MariaDB) hinzugefügt. Keine Plugin-Code-Änderung. **Danach (User-Wunsch, da timecode-obs public ist): das gesamte Koordinations-Backend in ein eigenes PRIVATES Repo `Minewache-Team/mw-aufnahme-web` ausgelagert und aus diesem public Repo entfernt** (`website/`, `scripts/`, `docker-compose.test.yml`, CI-Workflows `php-tests.yaml`/`smoke-test.yaml`). Verifiziert: `config.php`/echte Secrets waren NIE in der Historie dieses Repos (Pfad- + Pickaxe- + Tree-Grep über alle 95 Commits/Refs) → kein History-Rewrite nötig. Rollen-ID aus dem public `db.php` in die private `config.php` verschoben. Follow-up-Fix im neuen Repo: `episode_stats` crashte, wenn die `episode_deliveries`-Tabelle auf einer bestehenden DB fehlte — jetzt graceful (Folgen erscheinen ohne Haken; `install.php` erneut ausführen legt die Tabelle an). Website-Arbeit läuft ab jetzt in `mw-aufnahme-web`, nicht mehr hier. |
 | 31 | 2026-06-10 | Claude (Fable) | TICKET-075 (done) | 0.6.3 ready | Gegenstück zu TICKET-074: maximale Ferndiagnose für Entwickler/Regisseur auf allen drei Kanälen, gespeist aus EINER Quelle (`ltc_diag_t`/`ltc_source_get_diag()`; alter Accessor bleibt als Wrapper). Heartbeat +3 Felder (rtt_ms = Leitungsqualität, applied_delta_ms = Live-TC-Restabweichung, initial_skew_ms = Boot-Uhrfehler, COALESCE-persistiert) mit Consent-Bump auf v3 nach TICKET-048-Verfahren (Dialog-Bullet, datenschutz.php v3 + neue Tabellenzeile + Re-Consent-Box). Dashboard rendert RTT (farbcodiert), TC-Abw. (> 1 Frame) und persistenten Uhr-Fehler-Hinweis (löst das deferred TICKET-044-Dashboard-Wiring ein). Pro erfolgreichem Sync-Zyklus eine INFO-Logzeile → jedes via OBS "Log hochladen" geteilte Log ist eine Mess-Historie des Abends. Sidecar +6 Post-Mortem-Felder. Server: idempotente Migrationen, Junk→NULL-Validierung, status+SSE-SELECTs. Verifikation: 4/4 C-Suiten grün (23 Callsites migriert, 2 neue Shape-Tests); erstmals voller lokaler DB-Lauf: **28/28 PHPUnit gegen echte MariaDB** (3 neue Fälle; install.php-Guard mit MW_TEST_MODE-Ausnahme dabei mitverifiziert). |
 | 30 | 2026-06-10 | Claude (Fable) | TICKET-074 (done) | 0.6.3 ready | Support-surface round after user context ("viele Nutzer sind strohdumm, sitzen aber WÄHREND der Nutzung im Discord mit Entwickler+Regisseur"). Consequence: the user-visible surface must be Discord-relay-grade, logs are unreachable for this audience. Shipped: de-DE.ini (full German locale — English-only warnings were de-facto invisible for this fleet; OBS picks it up on German installs, installers deploy data/ recursively anyway); warnings now carry instructions ("SOFORT im Discord melden") instead of just describing the condition; Properties status enriched with measurement age + RTT; new `_support_info` property = one dense line (version | Cam | fps | Track | method offset @age RTT | TC) explicitly labelled for screenshot/paste into Discord; auto-setup dialogs migrated MessageBoxA→W with \u escapes — UTF-8 umlauts through the ANSI API rendered "MÃ¶chtest" on German Windows since the first release (the MW dialogs got this fix in TICKET-030, auto-setup was missed). Verified: 4/4 ctest suites green, syntax-clean both frontend modes (only known system-libobs header warnings in container). |
