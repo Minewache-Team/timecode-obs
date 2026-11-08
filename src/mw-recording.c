@@ -927,7 +927,8 @@ static LRESULT CALLBACK settings_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LP
 
 		/* Audio warning per source kind (TICKET-084) */
 		HWND warn_lbl = CreateWindowW(L"STATIC", L"Ton-Warnung während der Aufnahme:",
-					      WS_CHILD | WS_VISIBLE | SS_LEFT, lbl_x, y, full_w, 20, hwnd, NULL, NULL, NULL);
+					      WS_CHILD | WS_VISIBLE | SS_LEFT, lbl_x, y, full_w, 20, hwnd, NULL, NULL,
+					      NULL);
 		SendMessageW(warn_lbl, WM_SETFONT, (WPARAM)hFontBold, TRUE);
 		y += 26;
 
@@ -951,8 +952,10 @@ static LRESULT CALLBACK settings_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LP
 		EnableWindow(GetDlgItem(hwnd, IDC_WARN_LTC), FALSE);
 		CheckDlgButton(hwnd, IDC_WARN_PROGRAM,
 			       audio_monitor_warn_enabled(AM_KIND_PROGRAM) ? BST_CHECKED : BST_UNCHECKED);
-		CheckDlgButton(hwnd, IDC_WARN_GAME, audio_monitor_warn_enabled(AM_KIND_GAME) ? BST_CHECKED : BST_UNCHECKED);
-		CheckDlgButton(hwnd, IDC_WARN_MIC, audio_monitor_warn_enabled(AM_KIND_MIC) ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hwnd, IDC_WARN_GAME,
+			       audio_monitor_warn_enabled(AM_KIND_GAME) ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hwnd, IDC_WARN_MIC,
+			       audio_monitor_warn_enabled(AM_KIND_MIC) ? BST_CHECKED : BST_UNCHECKED);
 		y += 4;
 
 		HWND secs_lbl = CreateWindowW(L"STATIC", L"Warnen nach (ohne LTC):", WS_CHILD | WS_VISIBLE | SS_LEFT,
@@ -1050,10 +1053,13 @@ static LRESULT CALLBACK settings_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LP
 			save_config();
 			audio_monitor_set_warn_enabled(AM_KIND_PROGRAM,
 						       IsDlgButtonChecked(hwnd, IDC_WARN_PROGRAM) == BST_CHECKED);
-			audio_monitor_set_warn_enabled(AM_KIND_GAME, IsDlgButtonChecked(hwnd, IDC_WARN_GAME) == BST_CHECKED);
-			audio_monitor_set_warn_enabled(AM_KIND_MIC, IsDlgButtonChecked(hwnd, IDC_WARN_MIC) == BST_CHECKED);
+			audio_monitor_set_warn_enabled(AM_KIND_GAME,
+						       IsDlgButtonChecked(hwnd, IDC_WARN_GAME) == BST_CHECKED);
+			audio_monitor_set_warn_enabled(AM_KIND_MIC,
+						       IsDlgButtonChecked(hwnd, IDC_WARN_MIC) == BST_CHECKED);
 			int warn_sel = (int)SendDlgItemMessageW(hwnd, IDC_WARN_SECONDS, CB_GETCURSEL, 0, 0);
-			if (warn_sel >= 0 && warn_sel < (int)(sizeof(warn_second_choices) / sizeof(warn_second_choices[0])))
+			if (warn_sel >= 0 &&
+			    warn_sel < (int)(sizeof(warn_second_choices) / sizeof(warn_second_choices[0])))
 				audio_monitor_set_warn_seconds(warn_second_choices[warn_sel].seconds);
 			update_status_label(hwnd);
 			obs_log(LOG_INFO, "MW recording settings saved (enabled=%d)", g_mw.enabled);

@@ -210,8 +210,8 @@ static void paint_overlay(HWND hwnd)
 			  22, FW_NORMAL, AM_COLOR_WHITE);
 	if (!warning.is_ltc)
 		draw_overlay_text(dc, &area, &top,
-				  L"Warnung für diese Quelle abschalten: Werkzeuge → MW Aufnahme → Ton-Warnung",
-				  18, FW_NORMAL, AM_COLOR_WHITE);
+				  L"Warnung für diese Quelle abschalten: Werkzeuge → MW Aufnahme → Ton-Warnung", 18,
+				  FW_NORMAL, AM_COLOR_WHITE);
 
 	BitBlt(window_dc, 0, 0, client.right, client.bottom, dc, 0, 0, SRCCOPY);
 
@@ -532,9 +532,10 @@ static void check_entry(struct am_entry *entry, bool any_ltc_active)
 			  !active;
 	}
 
-	enum am_event event =
-		am_state_update(&entry->state, am_now_ms(), (uint64_t)os_atomic_load_long(&entry->last_signal_ms),
-				ignored, fault != LTC_FAULT_NONE, entry->is_ltc ? AM_LIMIT_LTC_MS : g_am.source_limit_ms);
+	enum am_event event = am_state_update(&entry->state, am_now_ms(),
+					      (uint64_t)os_atomic_load_long(&entry->last_signal_ms), ignored,
+					      fault != LTC_FAULT_NONE,
+					      entry->is_ltc ? AM_LIMIT_LTC_MS : g_am.source_limit_ms);
 
 	if (event == AM_EVENT_WARN) {
 		obs_log(LOG_WARNING, "audio monitor: no sound on '%s' (%s), ltc fault %d", entry->name, entry->track,
