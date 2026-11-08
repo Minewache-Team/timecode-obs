@@ -20,6 +20,8 @@
 
 #include "audio-monitor-core.h"
 
+#include <string.h>
+
 bool am_block_has_signal(const float *samples, size_t count, float threshold)
 {
 	if (!samples)
@@ -30,6 +32,37 @@ bool am_block_has_signal(const float *samples, size_t count, float threshold)
 			return true;
 	}
 	return false;
+}
+
+enum am_kind am_kind_from_id(const char *id)
+{
+	if (!id)
+		return AM_KIND_NONE;
+	if (strcmp(id, "obs_ltc_timecode_source") == 0)
+		return AM_KIND_LTC;
+	if (strcmp(id, "wasapi_process_output_capture") == 0 || strcmp(id, "wasapi_output_capture") == 0)
+		return AM_KIND_PROGRAM;
+	if (strcmp(id, "game_capture") == 0)
+		return AM_KIND_GAME;
+	if (strcmp(id, "wasapi_input_capture") == 0)
+		return AM_KIND_MIC;
+	return AM_KIND_NONE;
+}
+
+bool am_kind_warns_by_default(enum am_kind kind)
+{
+	return kind == AM_KIND_LTC || kind == AM_KIND_PROGRAM || kind == AM_KIND_GAME;
+}
+
+uint64_t am_source_limit_ms(int64_t seconds)
+{
+	if (seconds <= 0)
+		return AM_LIMIT_SOURCE_MS;
+	if (seconds < AM_LIMIT_SOURCE_MIN_SEC)
+		seconds = AM_LIMIT_SOURCE_MIN_SEC;
+	if (seconds > AM_LIMIT_SOURCE_MAX_SEC)
+		seconds = AM_LIMIT_SOURCE_MAX_SEC;
+	return (uint64_t)seconds * 1000u;
 }
 
 void am_state_init(struct am_source_state *state, uint64_t now_ms)

@@ -36,7 +36,19 @@ extern "C" {
 #define AM_SIGNAL_THRESHOLD 0.0001f
 
 #define AM_LIMIT_SOURCE_MS 60000u
+#define AM_LIMIT_SOURCE_MIN_SEC 10
+#define AM_LIMIT_SOURCE_MAX_SEC 1800
 #define AM_LIMIT_LTC_MS 3000u
+
+/* Which sources warn is chosen per kind, not per track: in the kit Discord
+ * and the microphone share track 1 (TICKET-084). */
+enum am_kind {
+	AM_KIND_NONE,
+	AM_KIND_LTC,
+	AM_KIND_PROGRAM,
+	AM_KIND_GAME,
+	AM_KIND_MIC,
+};
 
 enum am_event {
 	AM_EVENT_NONE,
@@ -55,6 +67,18 @@ struct am_source_state {
  * so a source with sound only costs a handful of comparisons per block.
  */
 bool am_block_has_signal(const float *samples, size_t count, float threshold);
+
+/* Maps an unversioned OBS source id to its kind, AM_KIND_NONE if unwatched.
+ * game_capture still needs "capture_audio" checked by the caller. */
+enum am_kind am_kind_from_id(const char *id);
+
+/* Default when the user has not chosen: a silent microphone is normal
+ * whenever nobody speaks, so it stays off. LTC always warns. */
+bool am_kind_warns_by_default(enum am_kind kind);
+
+/* User-set seconds without sound before a non-LTC source warns (TICKET-084).
+ * 0 means unset and gives the default, the rest is clamped to 10 s - 30 min. */
+uint64_t am_source_limit_ms(int64_t seconds);
 
 void am_state_init(struct am_source_state *state, uint64_t now_ms);
 

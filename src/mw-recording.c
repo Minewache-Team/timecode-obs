@@ -28,6 +28,7 @@
 #include "mw-recording.h"
 #include "mw-recording-helpers.h"
 #include "ltc-source.h"
+#include "audio-monitor.h"
 
 #include <obs-module.h>
 #include <obs-frontend-api.h>
@@ -808,6 +809,18 @@ static bool show_consent_dialog(const char *server_url)
 #define IDC_SAVE 1006
 #define IDC_RESET_CONSENT 1007
 #define IDC_STATUS_LABEL 1008
+#define IDC_WARN_LTC 1009
+#define IDC_WARN_PROGRAM 1010
+#define IDC_WARN_GAME 1011
+#define IDC_WARN_MIC 1012
+#define IDC_WARN_SECONDS 1013
+
+static const struct {
+	int seconds;
+	const wchar_t *text;
+} warn_second_choices[] = {
+	{30, L"30 Sekunden"}, {60, L"1 Minute"}, {120, L"2 Minuten"}, {300, L"5 Minuten"}, {600, L"10 Minuten"},
+};
 
 static HWND g_settings_hwnd = NULL;
 
@@ -912,6 +925,58 @@ static LRESULT CALLBACK settings_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LP
 			      NULL, NULL);
 		y += 14;
 
+		/* Audio warning per source kind (TICKET-084) */
+		HWND warn_lbl = CreateWindowW(L"STATIC", L"Ton-Warnung während der Aufnahme:",
+					      WS_CHILD | WS_VISIBLE | SS_LEFT, lbl_x, y, full_w, 20, hwnd, NULL, NULL, NULL);
+		SendMessageW(warn_lbl, WM_SETFONT, (WPARAM)hFontBold, TRUE);
+		y += 26;
+
+		static const struct {
+			int id;
+			const wchar_t *text;
+		} warn_boxes[] = {
+			{IDC_WARN_LTC, L"Timecode (LTC), immer an"},
+			{IDC_WARN_PROGRAM, L"Discord / Programm-Ton"},
+			{IDC_WARN_GAME, L"Ingame-Ton"},
+			{IDC_WARN_MIC, L"Mikrofon (Stille beim Nicht-Sprechen ist normal)"},
+		};
+		for (size_t i = 0; i < sizeof(warn_boxes) / sizeof(warn_boxes[0]); i++) {
+			HWND box = CreateWindowW(L"BUTTON", warn_boxes[i].text, WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+						 lbl_x + 10, y, full_w - 10, 22, hwnd, (HMENU)(INT_PTR)warn_boxes[i].id,
+						 NULL, NULL);
+			SendMessageW(box, WM_SETFONT, (WPARAM)hFont, TRUE);
+			y += 26;
+		}
+		CheckDlgButton(hwnd, IDC_WARN_LTC, BST_CHECKED);
+		EnableWindow(GetDlgItem(hwnd, IDC_WARN_LTC), FALSE);
+		CheckDlgButton(hwnd, IDC_WARN_PROGRAM,
+			       audio_monitor_warn_enabled(AM_KIND_PROGRAM) ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hwnd, IDC_WARN_GAME, audio_monitor_warn_enabled(AM_KIND_GAME) ? BST_CHECKED : BST_UNCHECKED);
+		CheckDlgButton(hwnd, IDC_WARN_MIC, audio_monitor_warn_enabled(AM_KIND_MIC) ? BST_CHECKED : BST_UNCHECKED);
+		y += 4;
+
+		HWND secs_lbl = CreateWindowW(L"STATIC", L"Warnen nach (ohne LTC):", WS_CHILD | WS_VISIBLE | SS_LEFT,
+					      lbl_x + 10, y + 3, 170, h, hwnd, NULL, NULL, NULL);
+		SendMessageW(secs_lbl, WM_SETFONT, (WPARAM)hFont, TRUE);
+		HWND secs_combo = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
+						edit_x + 30, y, 120, 200, hwnd, (HMENU)(INT_PTR)IDC_WARN_SECONDS, NULL,
+						NULL);
+		SendMessageW(secs_combo, WM_SETFONT, (WPARAM)hFont, TRUE);
+		int warn_seconds = audio_monitor_warn_seconds();
+		int warn_sel = -1;
+		for (size_t i = 0; i < sizeof(warn_second_choices) / sizeof(warn_second_choices[0]); i++) {
+			SendMessageW(secs_combo, CB_ADDSTRING, 0, (LPARAM)warn_second_choices[i].text);
+			if (warn_second_choices[i].seconds <= warn_seconds)
+				warn_sel = (int)i;
+		}
+		SendMessageW(secs_combo, CB_SETCURSEL, warn_sel < 0 ? 0 : warn_sel, 0);
+		y += 38;
+
+		/* Separator */
+		CreateWindowW(L"STATIC", NULL, WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ, lbl_x, y, full_w, 2, hwnd, NULL,
+			      NULL, NULL);
+		y += 14;
+
 		/* Buttons */
 		HWND btn = CreateWindowW(L"BUTTON", L"Speichern", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, lbl_x, y,
 					 130, 34, hwnd, (HMENU)(INT_PTR)IDC_SAVE, NULL, NULL);
@@ -983,6 +1048,13 @@ static LRESULT CALLBACK settings_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LP
 			/* Sets camera_id, persists config, syncs to LTC sources */
 			mw_recording_set_camera_id(new_cam, true);
 			save_config();
+			audio_monitor_set_warn_enabled(AM_KIND_PROGRAM,
+						       IsDlgButtonChecked(hwnd, IDC_WARN_PROGRAM) == BST_CHECKED);
+			audio_monitor_set_warn_enabled(AM_KIND_GAME, IsDlgButtonChecked(hwnd, IDC_WARN_GAME) == BST_CHECKED);
+			audio_monitor_set_warn_enabled(AM_KIND_MIC, IsDlgButtonChecked(hwnd, IDC_WARN_MIC) == BST_CHECKED);
+			int warn_sel = (int)SendDlgItemMessageW(hwnd, IDC_WARN_SECONDS, CB_GETCURSEL, 0, 0);
+			if (warn_sel >= 0 && warn_sel < (int)(sizeof(warn_second_choices) / sizeof(warn_second_choices[0])))
+				audio_monitor_set_warn_seconds(warn_second_choices[warn_sel].seconds);
 			update_status_label(hwnd);
 			obs_log(LOG_INFO, "MW recording settings saved (enabled=%d)", g_mw.enabled);
 			MessageBoxW(hwnd, L"Einstellungen gespeichert!", L"MW Aufnahme", MB_OK | MB_ICONINFORMATION);
@@ -1038,7 +1110,7 @@ static void open_settings_dialog(void)
 
 	g_settings_hwnd = CreateWindowExW(WS_EX_DLGMODALFRAME, L"MWRecordingSettings", L"MW Aufnahme",
 					  WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 500,
-					  420, NULL, NULL, GetModuleHandleW(NULL), NULL);
+					  620, NULL, NULL, GetModuleHandleW(NULL), NULL);
 
 	ShowWindow(g_settings_hwnd, SW_SHOW);
 	UpdateWindow(g_settings_hwnd);

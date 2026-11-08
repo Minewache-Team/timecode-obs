@@ -42,7 +42,6 @@
 #include <wchar.h>
 #endif
 
-#define LTC_SOURCE_ID "obs_ltc_timecode_source"
 #define AM_MAX_SOURCES 32
 #define AM_TICK_MS 1000
 #define AM_NS_PER_MS 1000000ULL
@@ -69,6 +68,7 @@ static struct {
 	size_t count;
 	bool have_ltc;
 	uint32_t rec_tracks;
+	uint64_t source_limit_ms;
 	uint64_t start_ns;
 	os_event_t *stop_event;
 	pthread_t thread;
@@ -112,6 +112,7 @@ struct am_warning {
 	uint64_t warned_ns;
 	int frozen_sec; /* -1 while the outage is running */
 	bool recovered;
+	bool is_ltc;
 };
 
 static struct {
@@ -207,6 +208,10 @@ static void paint_overlay(HWND hwnd)
 			  L"Melde dich jetzt kurz beim Dreh, damit das gefixt wird.\n"
 			  L"Ist das eine Fehlanzeige und der Ton ist in Ordnung? Sag beim Dreh trotzdem Bescheid.",
 			  22, FW_NORMAL, AM_COLOR_WHITE);
+	if (!warning.is_ltc)
+		draw_overlay_text(dc, &area, &top,
+				  L"Warnung für diese Quelle abschalten: Werkzeuge → MW Aufnahme → Ton-Warnung",
+				  18, FW_NORMAL, AM_COLOR_WHITE);
 
 	BitBlt(window_dc, 0, 0, client.right, client.bottom, dc, 0, 0, SRCCOPY);
 
@@ -413,9 +418,10 @@ static void overlay_show(const struct am_entry *entry, enum ltc_fault fault)
 		wcscpy_s(warning.reason, 128, ltc_fault_text(fault));
 
 	snprintf(warning.source, sizeof(warning.source), "%s", entry->name);
-	warning.limit_sec = (int)((entry->is_ltc ? AM_LIMIT_LTC_MS : AM_LIMIT_SOURCE_MS) / 1000);
+	warning.limit_sec = (int)((entry->is_ltc ? AM_LIMIT_LTC_MS : g_am.source_limit_ms) / 1000);
 	warning.warned_ns = os_gettime_ns();
 	warning.frozen_sec = -1;
+	warning.is_ltc = entry->is_ltc;
 
 	if (!g_overlay.thread_created)
 		return;
@@ -528,7 +534,7 @@ static void check_entry(struct am_entry *entry, bool any_ltc_active)
 
 	enum am_event event =
 		am_state_update(&entry->state, am_now_ms(), (uint64_t)os_atomic_load_long(&entry->last_signal_ms),
-				ignored, fault != LTC_FAULT_NONE, entry->is_ltc ? AM_LIMIT_LTC_MS : AM_LIMIT_SOURCE_MS);
+				ignored, fault != LTC_FAULT_NONE, entry->is_ltc ? AM_LIMIT_LTC_MS : g_am.source_limit_ms);
 
 	if (event == AM_EVENT_WARN) {
 		obs_log(LOG_WARNING, "audio monitor: no sound on '%s' (%s), ltc fault %d", entry->name, entry->track,
@@ -561,22 +567,73 @@ static void *monitor_thread_func(void *data)
 
 /* ---- Source collection ---- */
 
-/* game_capture always carries OBS_SOURCE_AUDIO, but only delivers sound
- * with "capture_audio" on. Without this check it would warn on every take. */
-static bool is_monitored_type(obs_source_t *source, const char *id)
+static const char *warn_config_key(enum am_kind kind)
 {
-	if (strcmp(id, "wasapi_input_capture") == 0 || strcmp(id, "wasapi_output_capture") == 0 ||
-	    strcmp(id, "wasapi_process_output_capture") == 0)
+	switch (kind) {
+	case AM_KIND_PROGRAM:
+		return "AudioWarnProgram";
+	case AM_KIND_GAME:
+		return "AudioWarnGame";
+	case AM_KIND_MIC:
+		return "AudioWarnMic";
+	default:
+		return NULL;
+	}
+}
+
+bool audio_monitor_warn_enabled(enum am_kind kind)
+{
+	if (kind == AM_KIND_LTC)
 		return true;
 
-	if (strcmp(id, "game_capture") == 0) {
+	const char *key = warn_config_key(kind);
+	config_t *user_config = obs_frontend_get_user_config();
+	if (!key || !user_config || !config_has_user_value(user_config, "obs-ltc-timecode", key))
+		return am_kind_warns_by_default(kind);
+	return config_get_bool(user_config, "obs-ltc-timecode", key);
+}
+
+void audio_monitor_set_warn_enabled(enum am_kind kind, bool enabled)
+{
+	const char *key = warn_config_key(kind);
+	config_t *user_config = obs_frontend_get_user_config();
+	if (!key || !user_config)
+		return;
+	config_set_bool(user_config, "obs-ltc-timecode", key, enabled);
+	config_save(user_config);
+}
+
+int audio_monitor_warn_seconds(void)
+{
+	config_t *user_config = obs_frontend_get_user_config();
+	int64_t seconds = user_config ? config_get_int(user_config, "obs-ltc-timecode", "AudioWarnSeconds") : 0;
+	return (int)(am_source_limit_ms(seconds) / 1000);
+}
+
+void audio_monitor_set_warn_seconds(int seconds)
+{
+	config_t *user_config = obs_frontend_get_user_config();
+	if (!user_config)
+		return;
+	config_set_int(user_config, "obs-ltc-timecode", "AudioWarnSeconds", seconds);
+	config_save(user_config);
+}
+
+/* game_capture always carries OBS_SOURCE_AUDIO, but only delivers sound
+ * with "capture_audio" on. Without this check it would warn on every take. */
+static bool is_monitored_type(obs_source_t *source, enum am_kind kind)
+{
+	if (kind == AM_KIND_NONE || kind == AM_KIND_LTC || !audio_monitor_warn_enabled(kind))
+		return false;
+
+	if (kind == AM_KIND_GAME) {
 		obs_data_t *settings = obs_source_get_settings(source);
 		bool capture_audio = obs_data_get_bool(settings, "capture_audio");
 		obs_data_release(settings);
 		return capture_audio;
 	}
 
-	return false;
+	return true;
 }
 
 static void build_track_label(struct am_entry *entry, config_t *profile, bool advanced)
@@ -613,8 +670,9 @@ static bool collect_source(void *param, obs_source_t *source)
 	if (!id || g_am.count >= AM_MAX_SOURCES)
 		return true;
 
-	bool is_ltc = strcmp(id, LTC_SOURCE_ID) == 0;
-	if (!is_ltc && !is_monitored_type(source, id))
+	enum am_kind kind = am_kind_from_id(id);
+	bool is_ltc = kind == AM_KIND_LTC;
+	if (!is_ltc && !is_monitored_type(source, kind))
 		return true;
 
 	obs_source_t *ref = obs_source_get_ref(source);
@@ -682,6 +740,7 @@ static void monitor_start(void)
 	}
 
 	g_am.start_ns = os_gettime_ns();
+	g_am.source_limit_ms = (uint64_t)audio_monitor_warn_seconds() * 1000u;
 
 	for (size_t i = 0; i < g_am.count; i++) {
 		struct am_entry *entry = &g_am.entries[i];

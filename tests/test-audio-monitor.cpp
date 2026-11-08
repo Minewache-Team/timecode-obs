@@ -129,3 +129,45 @@ TEST(StateUpdate, SignalNewerThanNowDoesNotUnderflow)
 	am_state_update(&state, 5000, 5100, false, false, AM_LIMIT_LTC_MS);
 	EXPECT_EQ(am_state_update(&state, 5050, 5100, false, false, AM_LIMIT_LTC_MS), AM_EVENT_NONE);
 }
+
+/* =================================================================
+ * am_kind_from_id / am_kind_warns_by_default (TICKET-084)
+ * ================================================================= */
+
+TEST(SourceKind, MapsKnownIds)
+{
+	EXPECT_EQ(am_kind_from_id("obs_ltc_timecode_source"), AM_KIND_LTC);
+	EXPECT_EQ(am_kind_from_id("wasapi_process_output_capture"), AM_KIND_PROGRAM);
+	EXPECT_EQ(am_kind_from_id("wasapi_output_capture"), AM_KIND_PROGRAM);
+	EXPECT_EQ(am_kind_from_id("game_capture"), AM_KIND_GAME);
+	EXPECT_EQ(am_kind_from_id("wasapi_input_capture"), AM_KIND_MIC);
+}
+
+TEST(SourceKind, UnknownAndNullAreNone)
+{
+	EXPECT_EQ(am_kind_from_id("image_source"), AM_KIND_NONE);
+	EXPECT_EQ(am_kind_from_id(""), AM_KIND_NONE);
+	EXPECT_EQ(am_kind_from_id(NULL), AM_KIND_NONE);
+}
+
+TEST(SourceKind, MicrophoneIsOffByDefault)
+{
+	EXPECT_TRUE(am_kind_warns_by_default(AM_KIND_LTC));
+	EXPECT_TRUE(am_kind_warns_by_default(AM_KIND_PROGRAM));
+	EXPECT_TRUE(am_kind_warns_by_default(AM_KIND_GAME));
+	EXPECT_FALSE(am_kind_warns_by_default(AM_KIND_MIC));
+	EXPECT_FALSE(am_kind_warns_by_default(AM_KIND_NONE));
+}
+
+TEST(SourceLimit, UnsetGivesDefault)
+{
+	EXPECT_EQ(am_source_limit_ms(0), AM_LIMIT_SOURCE_MS);
+	EXPECT_EQ(am_source_limit_ms(-5), AM_LIMIT_SOURCE_MS);
+}
+
+TEST(SourceLimit, ClampsToRange)
+{
+	EXPECT_EQ(am_source_limit_ms(3), 10000u);
+	EXPECT_EQ(am_source_limit_ms(120), 120000u);
+	EXPECT_EQ(am_source_limit_ms(99999), 1800000u);
+}

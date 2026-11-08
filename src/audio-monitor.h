@@ -23,8 +23,17 @@
 
 #ifdef ENABLE_FRONTEND_API
 
+#include "audio-monitor-core.h"
+
 void audio_monitor_init(void);
 void audio_monitor_cleanup(void);
+
+/* Per-kind warning switch from the MW settings dialog (TICKET-084).
+ * Takes effect with the next recording. LTC is always on. */
+bool audio_monitor_warn_enabled(enum am_kind kind);
+void audio_monitor_set_warn_enabled(enum am_kind kind, bool enabled);
+int audio_monitor_warn_seconds(void);
+void audio_monitor_set_warn_seconds(int seconds);
 
 #endif /* ENABLE_FRONTEND_API */
 
